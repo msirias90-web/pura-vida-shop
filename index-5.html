@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#0e5c3f" />
+<title>Pura Vida Shop</title>
+<link rel="manifest" href="data:application/json,{%22name%22:%22Pura%20Vida%20Shop%22,%22short_name%22:%22Pura%20Vida%22,%22start_url%22:%22.%22,%22display%22:%22standalone%22,%22background_color%22:%22%230e5c3f%22,%22theme_color%22:%22%230e5c3f%22}" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; font-family:system-ui,-apple-system,sans-serif; }
+  body { background:#f7f3e8; color:#1c1917; overscroll-behavior:none; }
+  input, select, button { font-family:inherit; }
+  .hidden { display:none !important; }
+  .spin { width:34px;height:34px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:s 0.8s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg); } }
+  .inp { width:100%;padding:0.7rem 0.9rem;border-radius:1rem;background:#f5f5f4;outline:none;color:#1c1917;border:none;font-size:16px; }
+  .inp:focus { box-shadow:0 0 0 2px #f4c542; }
+  .lbl { display:block;font-size:11px;font-weight:700;color:#78716c;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em; }
+  .card { background:#fff;border-radius:1.5rem;box-shadow:0 4px 16px rgba(7,56,42,.06); }
+  .btn-primary { background:#0e5c3f;color:#fff;border:none;border-radius:1rem;font-weight:700;padding:0.85rem;font-size:15px; }
+  .btn-gold { background:linear-gradient(135deg,#f4c542,#f0883e);color:#07382a;border:none;border-radius:1rem;font-weight:700;padding:0.9rem;font-size:15px; }
+  .btn-primary:disabled,.btn-gold:disabled { opacity:.4; }
+  ::placeholder { color:#a8a29e; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ====== CONFIGURACIÓN DE TU PROYECTO SUPABASE ======
+const SUPABASE_URL = "https://ryvyagkxpldlzjdubbui.supabase.co";
+const SUPABASE_KEY = "sb_publishable_L2LuA6RXKL9QS6G_CydCDQ_kArVIQp3";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ====== UTILIDADES ======
+const COL = (n) => "₡" + Number(Math.round(n)).toLocaleString("es-CR");
+const hoy = () => new Date().toISOString().slice(0,10);
+const dPlus = (d) => { const x=new Date(); x.setDate(x.getDate()+d); return x.toISOString().slice(0,10); };
+const esc = (s) => (s||"").replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const app = document.getElementById("app");
+
+// Estado en memoria
+let STATE = { user:null, clientes:[], ventas:[], periodo:7, tab:"inicio", detalle:null };
+
+// ====== CARGA DE DATOS ======
+async function cargarTodo() {
+  const [{ data:cli }, { data:ven }] = await Promise.all([
+    db.from("clientes").select("*").order("nombre"),
+    db.from("ventas").select("*").order("fecha_venta", { ascending:false }),
+  ]);
+  // abonos por cliente
+  const { data:abo } = await db.from("abonos").select("*").order("fecha");
+  const abonosPorCli = {};
+  (abo||[]).forEach(a => { (abonosPorCli[a.cliente_id] ??= []).push(a); });
+  STATE.clientes = (cli||[]).map(c => ({
+    ...c,
+    compras: (ven||[]).filter(v => v.cliente_id===c.id && v.tipo==="credito"),
+    abonos: abonosPorCli[c.id] || [],
+  }));
+  STATE.ventas = ven || [];
+}
+
+// Cálculos
+const totalComprado = (c) => c.compras.reduce((s,x)=>s+Number(x.monto),0);
+const totalAbonado  = (c) => c.abonos.reduce((s,x)=>s+Number(x.monto),0);
+const deuda = (c) => totalComprado(c) - totalAbonado(c);
+const proximoVence = (c) => c.compras.map(x=>x.fecha_limite).filter(Boolean).sort()[0];
+const enRango = (f,dias) => { const lim=new Date(); lim.setDate(lim.getDate()-dias); return new Date(f)>=lim; };
+
+// ====== RENDER ======
+function render() {
+  if (!STATE.user) return renderLogin();
+  renderApp();
+}
+
+// ---- LOGIN ----
+function renderLogin(err) {
+  app.innerHTML = `
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(120% 120% at 50% 0%,#0e5c3f,#07382a 60%,#052016)">
+    <div style="width:100%;max-width:380px">
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="width:80px;height:80px;border-radius:24px;background:linear-gradient(135deg,#f4c542,#f0883e);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;transform:rotate(3deg);box-shadow:0 10px 30px rgba(240,136,62,.4);font-size:38px">☀️</div>
+        <h1 style="color:#fff;font-size:30px;font-weight:800;font-family:Georgia,serif">Pura Vida Shop</h1>
+        <p style="color:#7fd1ad;font-size:14px;margin-top:4px">Tenis &amp; perfumes · control de ventas</p>
+      </div>
+      <div class="card" style="padding:24px">
+        <label class="lbl">Correo</label>
+        <input id="email" class="inp" style="margin-bottom:16px" type="email" placeholder="correo@ejemplo.com" value="msirias90@gmail.com" />
+        <label class="lbl">Contraseña</label>
+        <input id="pass" class="inp" style="margin-bottom:8px" type="password" placeholder="••••" />
+        ${err ? `<p style="color:#ef4444;font-size:13px;margin-bottom:8px">${esc(err)}</p>` : ""}
+        <button id="btnLogin" class="btn-gold" style="width:100%;margin-top:12px">Entrar</button>
+      </div>
+    </div>
+  </div>`;
+  const btn = document.getElementById("btnLogin");
+  const tryLogin = async () => {
+    const email = document.getElementById("email").value.trim();
+    const pass = document.getElementById("pass").value;
+    btn.textContent = "Entrando..."; btn.disabled = true;
+    const { data, error } = await db.auth.signInWithPassword({ email, password:pass });
+    if (error) { return renderLogin(traduceError(error.message)); }
+    STATE.user = data.user;
+    await cargarTodo();
+    render();
+  };
+  btn.onclick = tryLogin;
+  document.getElementById("pass").addEventListener("keydown", e => { if(e.key==="Enter") tryLogin(); });
+}
+
+function traduceError(m) {
+  if (/Invalid login/i.test(m)) return "Correo o contraseña incorrectos.";
+  if (/Email not confirmed/i.test(m)) return "El correo no está confirmado. Revisá Supabase → Authentication.";
+  return m;
+}
+
+// ---- APP PRINCIPAL ----
+function renderApp() {
+  app.innerHTML = `
+  <div style="min-height:100vh;padding-bottom:96px">
+    <div style="padding:24px 20px 28px;color:#fff;position:relative;overflow:hidden;background:linear-gradient(160deg,#0e5c3f,#07382a)">
+      <div style="display:flex;align-items:center;justify-content:space-between;position:relative">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,#f4c542,#f0883e);display:flex;align-items:center;justify-content:center;font-size:20px">☀️</div>
+          <div><p style="font-size:12px;color:#7fd1ad">Pura Vida Shop</p><h1 style="font-size:18px;font-weight:700">Hola</h1></div>
+        </div>
+        <button id="btnOut" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:18px">⎋</button>
+      </div>
+    </div>
+    <div style="padding:0 16px;margin-top:-16px" id="content"></div>
+  </div>
+  <div style="position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e7e5e4;padding:8px 24px;display:flex;justify-content:space-around;align-items:center">
+    <button class="navbtn" data-tab="inicio" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:80px">
+      <span style="font-size:20px">📈</span><span style="font-size:11px;font-weight:600">Reportes</span></button>
+    <button id="btnNueva" style="width:56px;height:56px;margin-top:-24px;border-radius:50%;background:linear-gradient(135deg,#f4c542,#f0883e);border:none;color:#07382a;font-size:28px;box-shadow:0 8px 20px rgba(240,136,62,.4)">+</button>
+    <button class="navbtn" data-tab="fiado" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:80px">
+      <span style="font-size:20px">👥</span><span style="font-size:11px;font-weight:600">Fiado</span></button>
+  </div>`;
+  document.getElementById("btnOut").onclick = async () => { await db.auth.signOut(); STATE.user=null; render(); };
+  document.getElementById("btnNueva").onclick = () => { STATE.tab="nueva"; renderContent(); };
+  document.querySelectorAll(".navbtn").forEach(b => b.onclick = () => { STATE.tab=b.dataset.tab; renderContent(); });
+  renderContent();
+}
+
+function renderContent() {
+  const c = document.getElementById("content");
+  // resaltar nav
+  document.querySelectorAll(".navbtn").forEach(b=>{
+    const on = b.dataset.tab===STATE.tab || (STATE.tab==="nueva"&&false);
+    b.style.color = on ? "#0e5c3f" : "#a8a29e";
+  });
+  if (STATE.tab==="inicio") return renderInicio(c);
+  if (STATE.tab==="fiado") return renderFiado(c);
+  if (STATE.tab==="nueva") return renderNueva(c);
+}
+
+// ---- REPORTES ----
+function renderInicio(c) {
+  const per = STATE.periodo;
+  const contadoPer = STATE.ventas.filter(v=>v.tipo==="contado" && enRango(v.fecha_venta,per));
+  const credPer = STATE.ventas.filter(v=>v.tipo==="credito" && enRango(v.fecha_venta,per));
+  const tC = contadoPer.reduce((s,v)=>s+Number(v.monto),0);
+  const tCr = credPer.reduce((s,v)=>s+Number(v.monto),0);
+  const deudores = STATE.clientes.filter(x=>deuda(x)>0);
+  const porCobrar = deudores.reduce((s,x)=>s+deuda(x),0);
+  const ventas = [...contadoPer.map(v=>({...v,_t:"contado"})), ...credPer.map(v=>{
+    const cli = STATE.clientes.find(k=>k.id===v.cliente_id); return {...v,_t:"credito",_cli:cli?cli.nombre:""};
+  })].sort((a,b)=>b.fecha_venta.localeCompare(a.fecha_venta));
+
+  c.innerHTML = `
+  <div style="padding-top:20px">
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="perbtn" data-p="7" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${per===7?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Esta semana</button>
+      <button class="perbtn" data-p="30" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${per===30?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Este mes</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      ${metric("💵","Contado",COL(tC),contadoPer.length+" ventas","#0e5c3f")}
+      ${metric("⏳","Crédito (fiado)",COL(tCr),credPer.length+" compras","#0891b2")}
+    </div>
+    <div style="margin-bottom:20px">${metric("📊","Por cobrar (deuda total)",COL(porCobrar),deudores.length+" clientes con saldo","#ea580c")}</div>
+    <h2 style="font-size:14px;font-weight:800;color:#44403c;margin:0 4px 8px">Ventas del periodo</h2>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${ventas.length? ventas.map(v=>`
+        <div class="card" style="padding:12px;display:flex;align-items:center;justify-content:between;gap:10px">
+          <div style="width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:${v._t==='contado'?'#0e5c3f1f':'#0891b21f'}">🛍️</div>
+          <div style="flex:1"><p style="font-weight:700;font-size:14px">${esc(v.producto)}</p>
+            <p style="font-size:12px;color:#a8a29e">${v._t==='contado'?'Contado':esc(v._cli||'')} · ${v.fecha_venta}</p></div>
+          <p style="font-weight:800;font-size:14px">${COL(v.monto)}</p>
+        </div>`).join("")
+      : `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:32px 0">No hay ventas en este periodo.</p>`}
+    </div>
+  </div>`;
+  c.querySelectorAll(".perbtn").forEach(b=>b.onclick=()=>{ STATE.periodo=Number(b.dataset.p); renderContent(); });
+}
+function metric(icon,label,val,sub,color) {
+  return `<div class="card" style="padding:16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <div style="width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:${color}1f;font-size:16px">${icon}</div>
+      <span style="font-size:12px;font-weight:600;color:#78716c">${label}</span></div>
+    <div style="font-size:20px;font-weight:800">${val}</div>
+    <div style="font-size:12px;color:#a8a29e;margin-top:2px">${sub}</div></div>`;
+}
+
+// ---- FIADO ----
+function renderFiado(c, filtro="") {
+  const deudores = STATE.clientes.filter(x=>deuda(x)>0)
+    .filter(x=>x.nombre.toLowerCase().includes(filtro.trim().toLowerCase()))
+    .sort((a,b)=>(proximoVence(a)||"").localeCompare(proximoVence(b)||""));
+  const todos = STATE.clientes.filter(x=>deuda(x)>0);
+  c.innerHTML = `
+  <div style="padding-top:20px">
+    <h2 style="font-size:18px;font-weight:800;margin:0 4px 2px">Libreta de fiado</h2>
+    <p style="font-size:12px;color:#a8a29e;margin:0 4px 12px">Toca un cliente para ver su cuenta</p>
+    <div style="position:relative;margin-bottom:16px">
+      <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px">🔍</span>
+      <input id="busca" class="inp" style="padding-left:40px;background:#fff;box-shadow:0 2px 10px rgba(7,56,42,.05)" placeholder="Buscar cliente..." value="${esc(filtro)}" />
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      ${deudores.length? deudores.map(cli=>{
+        const venc = proximoVence(cli); const vd = venc && new Date(venc)<new Date();
+        return `<button class="clibtn" data-id="${cli.id}" style="text-align:left;border:none;width:100%" >
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+              <div><p style="font-weight:800">${esc(cli.nombre)}</p>
+                <p style="font-size:12px;color:#a8a29e">${cli.compras.length} compra${cli.compras.length>1?'s':''} a crédito</p></div>
+              <div style="text-align:right"><p style="font-size:12px;color:#a8a29e">debe</p>
+                <p style="font-size:20px;font-weight:800;color:#ea580c">${COL(deuda(cli))}</p></div>
+            </div>
+            ${venc?`<div style="font-size:12px;font-weight:600;color:${vd?'#dc2626':'#78716c'}">📅 ${vd?'Tiene pagos vencidos':'Próximo vence '+fmt(venc)}</div>`:""}
+          </div></button>`;
+      }).join("")
+      : (todos.length? `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:40px 0">Ningún cliente con ese nombre.</p>`
+                     : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada. ¡Pura vida!</p></div>`)}
+    </div>
+  </div>`;
+  const bi = document.getElementById("busca");
+  bi.oninput = () => { renderFiado(c, bi.value); const x=document.getElementById("busca"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); };
+  c.querySelectorAll(".clibtn").forEach(b=>b.onclick=()=>{ STATE.detalle=Number(b.dataset.id); renderDetalle(); });
+}
+function fmt(iso){ return new Date(iso).toLocaleDateString("es-CR",{day:"numeric",month:"short"}); }
+function fmtLargo(iso){ return new Date(iso).toLocaleDateString("es-CR",{day:"numeric",month:"long"}); }
+
+// ---- DETALLE CLIENTE (modal) ----
+function renderDetalle() {
+  const cli = STATE.clientes.find(x=>x.id===STATE.detalle); if(!cli) return;
+  const venc = proximoVence(cli); const vd = venc && new Date(venc)<new Date();
+  const ov = document.createElement("div");
+  ov.id="modal";
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:50";
+  ov.innerHTML = `
+  <div style="background:#f7f3e8;width:100%;border-radius:24px 24px 0 0;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+    <div style="position:sticky;top:0;padding:16px 20px;color:#fff;border-radius:24px 24px 0 0;background:linear-gradient(160deg,#0e5c3f,#07382a)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="width:48px;height:4px;background:rgba(255,255,255,.3);border-radius:99px"></div>
+        <button id="cerrar" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:18px">✕</button>
+      </div>
+      <p style="font-size:24px;font-weight:800">${esc(cli.nombre)}</p>
+      <p style="font-size:14px;color:#7fd1ad;margin-top:8px">Deuda total</p>
+      <p style="font-size:36px;font-weight:800">${COL(deuda(cli))}</p>
+      ${venc?`<p style="font-size:12px;margin-top:8px;color:${vd?'#fca5a5':'#7fd1ad'}">${vd?'⚠ Tiene pagos vencidos':'Próximo vence el '+fmtLargo(venc)}</p>`:""}
+    </div>
+    <div style="padding:20px">
+      <h3 style="font-size:14px;font-weight:800;color:#44403c;margin-bottom:8px">Compras a crédito</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+        ${cli.compras.map(x=>{const xv=new Date(x.fecha_limite)<new Date();
+          return `<div style="background:#fff;border-radius:1rem;padding:12px;display:flex;justify-content:space-between;align-items:center">
+            <div><p style="font-weight:700;font-size:14px">${esc(x.producto)}</p>
+              <p style="font-size:12px;color:${xv?'#dc2626':'#a8a29e'}">vence ${fmt(x.fecha_limite)}</p></div>
+            <p style="font-weight:800;font-size:14px">${COL(x.monto)}</p></div>`;}).join("")}
+      </div>
+      ${cli.abonos.length?`<h3 style="font-size:14px;font-weight:800;color:#44403c;margin-bottom:8px">Abonos recibidos</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+        ${cli.abonos.map(a=>`<div style="background:rgba(255,255,255,.6);border-radius:1rem;padding:12px;display:flex;justify-content:space-between">
+          <p style="font-size:12px;color:#78716c">${a.fecha}</p>
+          <p style="font-weight:700;font-size:14px;color:#0e5c3f">− ${COL(a.monto)}</p></div>`).join("")}
+      </div>`:""}
+      <div style="display:flex;gap:8px;padding-bottom:8px">
+        <button id="btnAbono" class="btn-primary" style="flex:1">Registrar abono</button>
+        <a id="btnWa" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:14px 20px;border-radius:1rem;font-weight:700;color:#fff;background:#25D366;text-decoration:none">💬 WhatsApp</a>
+      </div>
+    </div>
+  </div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  document.getElementById("cerrar").onclick = () => ov.remove();
+  document.getElementById("btnAbono").onclick = () => renderAbono(cli);
+  // WhatsApp
+  const txt = vd
+    ? `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}. Algunos pagos ya pasaron de fecha, ¿cuándo podría abonar? ¡Mil gracias!`
+    : `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}${venc?`, con próximo vencimiento el ${fmtLargo(venc)}`:""}. ¡Gracias y pura vida!`;
+  document.getElementById("btnWa").href = `https://wa.me/${(cli.telefono||"").replace(/\D/g,"")}?text=${encodeURIComponent(txt)}`;
+  document.getElementById("btnWa").target = "_blank";
+}
+
+// ---- MODAL ABONO ----
+function renderAbono(cli) {
+  const saldo = deuda(cli);
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:60";
+  ov.innerHTML = `
+  <div style="background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 24px 32px" onclick="event.stopPropagation()">
+    <div style="width:48px;height:4px;background:#e7e5e4;border-radius:99px;margin:0 auto 16px"></div>
+    <button id="atras" style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;margin-bottom:16px;padding:8px 12px;border-radius:99px;background:#0e5c3f12;color:#0e5c3f;border:none">← Atrás</button>
+    <h3 style="font-size:18px;font-weight:800;margin-bottom:4px">Registrar abono</h3>
+    <p style="font-size:14px;color:#a8a29e;margin-bottom:4px">${esc(cli.nombre)}</p>
+    <p style="font-size:14px;font-weight:700;color:#ea580c;margin-bottom:16px">Deuda actual: ${COL(saldo)}</p>
+    <label class="lbl">Monto del abono</label>
+    <input id="monto" class="inp" style="font-size:18px;margin-bottom:8px" type="number" inputmode="decimal" placeholder="0" />
+    <p id="err" style="font-size:12px;color:#ef4444;margin-bottom:8px;display:none">El abono no puede superar la deuda.</p>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button id="cancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
+      <button id="guardar" class="btn-primary" style="flex:1">Guardar</button>
+    </div>
+  </div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  const cerrar = () => ov.remove();
+  document.getElementById("atras").onclick = cerrar;
+  document.getElementById("cancelar").onclick = cerrar;
+  const mi = document.getElementById("monto"); mi.focus();
+  document.getElementById("guardar").onclick = async () => {
+    const num = parseFloat(mi.value)||0;
+    if (num<=0) return;
+    if (num>saldo) { document.getElementById("err").style.display="block"; return; }
+    const g = document.getElementById("guardar"); g.textContent="Guardando..."; g.disabled=true;
+    const { error } = await db.from("abonos").insert({ cliente_id:cli.id, monto:num, fecha:hoy() });
+    if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar"; return; }
+    await cargarTodo();
+    ov.remove();
+    document.getElementById("modal")?.remove();
+    renderContent();
+  };
+}
+
+// ---- NUEVA VENTA ----
+function renderNueva(c) {
+  let tipo="contado", clienteSel="nuevo";
+  const draw = () => {
+    const existentes = STATE.clientes;
+    c.innerHTML = `
+    <div style="padding-top:20px">
+      <button id="volver" style="display:flex;align-items:center;gap:4px;color:#78716c;font-size:14px;margin-bottom:12px;background:none;border:none">← Volver</button>
+      <h2 style="font-size:18px;font-weight:800;margin:0 4px 16px">Nueva venta</h2>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <button class="tipobtn" data-t="contado" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${tipo==='contado'?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Contado</button>
+        <button class="tipobtn" data-t="credito" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${tipo==='credito'?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Crédito (fiado)</button>
+      </div>
+      ${tipo==="credito"?`
+      <div class="card" style="padding:16px;margin-bottom:12px">
+        <label class="lbl">Cliente</label>
+        <select id="cliSel" class="inp" style="margin-bottom:4px">
+          <option value="nuevo">+ Cliente nuevo</option>
+          ${existentes.map(x=>`<option value="${x.id}" ${clienteSel==String(x.id)?'selected':''}>${esc(x.nombre)} — debe ${COL(deuda(x))}</option>`).join("")}
+        </select>
+        ${clienteSel!=="nuevo"?`<p style="font-size:12px;color:#ea580c;margin-top:6px">Esta compra se suma a su deuda actual.</p>`:`
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:12px">
+          <div><label class="lbl">Nombre del cliente</label><input id="nombre" class="inp" placeholder="María López" /></div>
+          <div><label class="lbl">WhatsApp (con código de país)</label><input id="tel" class="inp" inputmode="tel" placeholder="506 8888 7777" /></div>
+        </div>`}
+      </div>`:""}
+      <div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">
+        <div><label class="lbl">Producto</label><input id="prod" class="inp" placeholder="Tenis Nike / Perfume Dior" /></div>
+        <div><label class="lbl">Monto (₡)</label><input id="monto" class="inp" type="number" inputmode="decimal" placeholder="0" /></div>
+        ${tipo==="credito"?`<div><label class="lbl">Pagar en (días)</label><input id="dias" class="inp" type="number" value="15" /></div>`:""}
+      </div>
+      <button id="guardar" class="btn-gold" style="width:100%;margin-top:16px">Guardar venta</button>
+    </div>`;
+    document.getElementById("volver").onclick = () => { STATE.tab="inicio"; renderContent(); };
+    c.querySelectorAll(".tipobtn").forEach(b=>b.onclick=()=>{ tipo=b.dataset.t; draw(); });
+    const sel = document.getElementById("cliSel");
+    if (sel) sel.onchange = () => { clienteSel=sel.value; draw(); };
+    document.getElementById("guardar").onclick = guardar;
+  };
+  const guardar = async () => {
+    const prod = (document.getElementById("prod").value||"").trim();
+    const monto = parseFloat(document.getElementById("monto").value)||0;
+    if (!prod || monto<=0) { alert("Escribí el producto y un monto válido."); return; }
+    const g = document.getElementById("guardar"); g.textContent="Guardando..."; g.disabled=true;
+    try {
+      if (tipo==="contado") {
+        await db.from("ventas").insert({ tipo:"contado", producto:prod, monto, fecha_venta:hoy() });
+      } else {
+        let clienteId = clienteSel!=="nuevo" ? Number(clienteSel) : null;
+        if (!clienteId) {
+          const nombre = (document.getElementById("nombre").value||"").trim();
+          const tel = (document.getElementById("tel").value||"").replace(/\D/g,"");
+          if (!nombre || !tel) { alert("Poné el nombre y el WhatsApp del cliente."); g.disabled=false; g.textContent="Guardar venta"; return; }
+          const { data:nuevo, error:e1 } = await db.from("clientes").insert({ nombre, telefono:tel }).select().single();
+          if (e1) throw e1;
+          clienteId = nuevo.id;
+        }
+        const dias = parseInt(document.getElementById("dias").value)||15;
+        await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(dias) });
+      }
+      await cargarTodo();
+      STATE.tab="inicio"; renderContent();
+    } catch(err) {
+      alert("Error al guardar: "+(err.message||err));
+      g.disabled=false; g.textContent="Guardar venta";
+    }
+  };
+  draw();
+}
+
+// ====== ARRANQUE ======
+(async () => {
+  const { data } = await db.auth.getSession();
+  if (data.session) { STATE.user = data.session.user; await cargarTodo(); }
+  render();
+})();
+</script>
+</body>
+</html>
