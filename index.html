@@ -140,13 +140,14 @@ function traduceError(m) {
 function renderApp() {
   app.innerHTML = `
   <div style="min-height:100vh;padding-bottom:96px">
-    <div style="padding:24px 20px 28px;color:#fff;position:relative;overflow:hidden;background:linear-gradient(160deg,#0e5c3f,#07382a)">
-      <div style="display:flex;align-items:center;justify-content:space-between;position:relative">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:40px;height:40px;border-radius:12px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden"><img src="${LOGO_ICO}" style="width:100%;height:100%;object-fit:cover" /></div>
-          <div><p style="font-size:12px;color:#7fd1ad">Pura Vida Shop</p><h1 style="font-size:18px;font-weight:700">Hola</h1></div>
-        </div>
+    <div style="padding:16px 20px 28px;color:#fff;position:relative;overflow:hidden;background:linear-gradient(160deg,#0e5c3f,#07382a)">
+      <div style="display:flex;justify-content:flex-end;position:relative">
         <button id="btnOut" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:18px">⎋</button>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;position:relative;margin-top:-8px">
+        <div style="width:64px;height:64px;border-radius:18px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:8px"><img src="${LOGO_ICO}" style="width:100%;height:100%;object-fit:cover" /></div>
+        <p style="font-size:12px;color:#7fd1ad">Pura Vida Shop</p>
+        <h1 style="font-size:20px;font-weight:700">Hola</h1>
       </div>
     </div>
     <div style="padding:0 16px;margin-top:-16px" id="content"></div>
