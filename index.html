@@ -61,6 +61,22 @@ async function cargarTodo() {
   STATE.ventas = ven || [];
 }
 
+// Borrados (con confirmación)
+async function borrarVenta(id, nombre) {
+  if (!confirm(`¿Eliminar esta venta?\n\n${nombre}\n\nEsta acción no se puede deshacer.`)) return false;
+  const { error } = await db.from("ventas").delete().eq("id", id);
+  if (error) { alert("Error al eliminar: "+error.message); return false; }
+  await cargarTodo();
+  return true;
+}
+async function borrarAbono(id) {
+  if (!confirm("¿Eliminar este abono?\n\nLa deuda del cliente volverá a subir por ese monto.")) return false;
+  const { error } = await db.from("abonos").delete().eq("id", id);
+  if (error) { alert("Error al eliminar: "+error.message); return false; }
+  await cargarTodo();
+  return true;
+}
+
 // Cálculos
 const totalComprado = (c) => c.compras.reduce((s,x)=>s+Number(x.monto),0);
 const totalAbonado  = (c) => c.abonos.reduce((s,x)=>s+Number(x.monto),0);
@@ -182,16 +198,21 @@ function renderInicio(c) {
     <h2 style="font-size:14px;font-weight:800;color:#44403c;margin:0 4px 8px">Ventas del periodo</h2>
     <div style="display:flex;flex-direction:column;gap:8px">
       ${ventas.length? ventas.map(v=>`
-        <div class="card" style="padding:12px;display:flex;align-items:center;justify-content:between;gap:10px">
+        <div class="card" style="padding:12px;display:flex;align-items:center;gap:10px">
           <div style="width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:${v._t==='contado'?'#0e5c3f1f':'#0891b21f'}">🛍️</div>
           <div style="flex:1"><p style="font-weight:700;font-size:14px">${esc(v.producto)}</p>
             <p style="font-size:12px;color:#a8a29e">${v._t==='contado'?'Contado':esc(v._cli||'')} · ${v.fecha_venta}</p></div>
           <p style="font-weight:800;font-size:14px">${COL(v.monto)}</p>
+          ${v._t==='contado'?`<button class="delventa" data-id="${v.id}" data-nom="${esc(v.producto)} (contado)" style="background:none;border:none;font-size:18px;padding:4px;color:#dc2626">🗑️</button>`:""}
         </div>`).join("")
       : `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:32px 0">No hay ventas en este periodo.</p>`}
     </div>
   </div>`;
   c.querySelectorAll(".perbtn").forEach(b=>b.onclick=()=>{ STATE.periodo=Number(b.dataset.p); renderContent(); });
+  c.querySelectorAll(".delventa").forEach(b=>b.onclick=async(e)=>{
+    e.stopPropagation();
+    if (await borrarVenta(Number(b.dataset.id), b.dataset.nom)) renderContent();
+  });
 }
 function metric(icon,label,val,sub,color) {
   return `<div class="card" style="padding:16px">
@@ -264,16 +285,18 @@ function renderDetalle() {
       <h3 style="font-size:14px;font-weight:800;color:#44403c;margin-bottom:8px">Compras a crédito</h3>
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
         ${cli.compras.map(x=>{const xv=new Date(x.fecha_limite)<new Date();
-          return `<div style="background:#fff;border-radius:1rem;padding:12px;display:flex;justify-content:space-between;align-items:center">
-            <div><p style="font-weight:700;font-size:14px">${esc(x.producto)}</p>
+          return `<div style="background:#fff;border-radius:1rem;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div style="flex:1"><p style="font-weight:700;font-size:14px">${esc(x.producto)}</p>
               <p style="font-size:12px;color:${xv?'#dc2626':'#a8a29e'}">vence ${fmt(x.fecha_limite)}</p></div>
-            <p style="font-weight:800;font-size:14px">${COL(x.monto)}</p></div>`;}).join("")}
+            <p style="font-weight:800;font-size:14px">${COL(x.monto)}</p>
+            <button class="delcompra" data-id="${x.id}" data-nom="${esc(x.producto)}" style="background:none;border:none;font-size:17px;padding:2px;color:#dc2626">🗑️</button></div>`;}).join("")}
       </div>
       ${cli.abonos.length?`<h3 style="font-size:14px;font-weight:800;color:#44403c;margin-bottom:8px">Abonos recibidos</h3>
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
-        ${cli.abonos.map(a=>`<div style="background:rgba(255,255,255,.6);border-radius:1rem;padding:12px;display:flex;justify-content:space-between">
-          <p style="font-size:12px;color:#78716c">${a.fecha}</p>
-          <p style="font-weight:700;font-size:14px;color:#0e5c3f">− ${COL(a.monto)}</p></div>`).join("")}
+        ${cli.abonos.map(a=>`<div style="background:rgba(255,255,255,.6);border-radius:1rem;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <p style="font-size:12px;color:#78716c;flex:1">${a.fecha}</p>
+          <p style="font-weight:700;font-size:14px;color:#0e5c3f">− ${COL(a.monto)}</p>
+          <button class="delabono" data-id="${a.id}" style="background:none;border:none;font-size:17px;padding:2px;color:#dc2626">🗑️</button></div>`).join("")}
       </div>`:""}
       <div style="display:flex;gap:8px;padding-bottom:8px">
         <button id="btnAbono" class="btn-primary" style="flex:1">Registrar abono</button>
@@ -285,6 +308,21 @@ function renderDetalle() {
   document.body.appendChild(ov);
   document.getElementById("cerrar").onclick = () => ov.remove();
   document.getElementById("btnAbono").onclick = () => renderAbono(cli);
+  // Borrar compras y abonos
+  const refrescar = () => {
+    ov.remove();
+    const sigue = STATE.clientes.find(x=>x.id===cli.id && deuda(x)>0);
+    if (sigue) { STATE.detalle=cli.id; renderDetalle(); }
+    renderContent();
+  };
+  ov.querySelectorAll(".delcompra").forEach(b=>b.onclick=async(e)=>{
+    e.stopPropagation();
+    if (await borrarVenta(Number(b.dataset.id), b.dataset.nom+" (crédito de "+cli.nombre+")")) refrescar();
+  });
+  ov.querySelectorAll(".delabono").forEach(b=>b.onclick=async(e)=>{
+    e.stopPropagation();
+    if (await borrarAbono(Number(b.dataset.id))) refrescar();
+  });
   // WhatsApp
   const txt = vd
     ? `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}. Algunos pagos ya pasaron de fecha, ¿cuándo podría abonar? ¡Mil gracias!`
@@ -335,7 +373,7 @@ function renderAbono(cli) {
 
 // ---- NUEVA VENTA ----
 function renderNueva(c) {
-  let tipo="contado", clienteSel="nuevo";
+  let tipo="contado", clienteSel="nuevo", plazo=15;
   const draw = () => {
     const existentes = STATE.clientes;
     c.innerHTML = `
@@ -362,7 +400,11 @@ function renderNueva(c) {
       <div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">
         <div><label class="lbl">Producto</label><input id="prod" class="inp" placeholder="Tenis Nike / Perfume Dior" /></div>
         <div><label class="lbl">Monto (₡)</label><input id="monto" class="inp" type="number" inputmode="decimal" placeholder="0" /></div>
-        ${tipo==="credito"?`<div><label class="lbl">Pagar en (días)</label><input id="dias" class="inp" type="number" value="15" /></div>`:""}
+        ${tipo==="credito"?`<div><label class="lbl">¿Cuándo paga?</label>
+          <div style="display:flex;gap:8px">
+            ${[{d:7,t:"Semana"},{d:15,t:"Quincena"},{d:30,t:"Mes"}].map(o=>`
+              <button type="button" class="plazobtn" data-d="${o.d}" style="flex:1;padding:10px 4px;border-radius:1rem;font-weight:700;font-size:13px;border:none;${plazo===o.d?'background:#0e5c3f;color:#fff':'background:#f5f5f4;color:#78716c'}">${o.t}</button>`).join("")}
+          </div></div>`:""}
       </div>
       <button id="guardar" class="btn-gold" style="width:100%;margin-top:16px">Guardar venta</button>
     </div>`;
@@ -370,6 +412,7 @@ function renderNueva(c) {
     c.querySelectorAll(".tipobtn").forEach(b=>b.onclick=()=>{ tipo=b.dataset.t; draw(); });
     const sel = document.getElementById("cliSel");
     if (sel) sel.onchange = () => { clienteSel=sel.value; draw(); };
+    c.querySelectorAll(".plazobtn").forEach(b=>b.onclick=()=>{ plazo=Number(b.dataset.d); draw(); });
     document.getElementById("guardar").onclick = guardar;
   };
   const guardar = async () => {
@@ -390,8 +433,7 @@ function renderNueva(c) {
           if (e1) throw e1;
           clienteId = nuevo.id;
         }
-        const dias = parseInt(document.getElementById("dias").value)||15;
-        await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(dias) });
+        await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(plazo) });
       }
       await cargarTodo();
       STATE.tab="inicio"; renderContent();
