@@ -48,36 +48,56 @@ const esc = (s) => (s||"").replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&
 const app = document.getElementById("app");
 
 // Estado en memoria
-let STATE = { user:null, clientes:[], ventas:[], periodo:7, tab:"inicio", detalle:null, errorCarga:null };
+let STATE = { user:null, clientes:[], ventas:[], meses:[], mesActivo:null, periodo:7, tab:"inicio", detalle:null, errorCarga:null };
 
 // ====== CARGA DE DATOS ======
 // MEJORA 4: manejo de errores de red. Si algo falla, se marca errorCarga
 // y la interfaz muestra un aviso en vez de mostrar todo en cero.
 async function cargarTodo() {
   try {
-    const [cliRes, venRes, aboRes] = await Promise.all([
+    const [cliRes, venRes, aboRes, mesRes] = await Promise.all([
       db.from("clientes").select("*").order("nombre"),
       db.from("ventas").select("*").order("fecha_venta", { ascending:false }),
       db.from("abonos").select("*").order("fecha"),
+      db.from("meses").select("*").order("anio").order("mes"),
     ]);
     if (cliRes.error) throw cliRes.error;
     if (venRes.error) throw venRes.error;
     if (aboRes.error) throw aboRes.error;
+    if (mesRes.error) throw mesRes.error;
     const cli = cliRes.data, ven = venRes.data, abo = aboRes.data;
-    const abonosPorCli = {};
-    (abo||[]).forEach(a => { (abonosPorCli[a.cliente_id] ??= []).push(a); });
-    STATE.clientes = (cli||[]).map(c => ({
-      ...c,
-      compras: (ven||[]).filter(v => v.cliente_id===c.id && v.tipo==="credito"),
-      abonos: abonosPorCli[c.id] || [],
-    }));
-    STATE.ventas = ven || [];
+    STATE.clientesRaw = cli || [];
+    STATE.meses = mesRes.data || [];
+    STATE.ventasTodas = ven || [];   // todas, sin filtrar (para reasignar, etc.)
+    STATE.abonosTodos = abo || [];
+    // Si no hay mes activo, tomar el último (más reciente)
+    if (!STATE.mesActivo && STATE.meses.length) {
+      STATE.mesActivo = STATE.meses[STATE.meses.length-1].id;
+    }
+    reconstruirClientes();
     STATE.errorCarga = null;
     return true;
   } catch (err) {
     STATE.errorCarga = err.message || "No se pudo conectar. Revisá tu internet e intentá de nuevo.";
     return false;
   }
+}
+
+// Reconstruye clientes y ventas filtrando por el mes activo.
+// Separado de cargarTodo para poder recalcular al cambiar de mes sin ir a la red.
+function reconstruirClientes() {
+  const mid = STATE.mesActivo;
+  const ven = (STATE.ventasTodas||[]).filter(v => v.mes_id===mid);
+  const abo = (STATE.abonosTodos||[]).filter(a => a.mes_id===mid);
+  const abonosPorCli = {};
+  abo.forEach(a => { (abonosPorCli[a.cliente_id] ??= []).push(a); });
+  const todosCli = STATE.clientesRaw || [];
+  STATE.clientes = todosCli.map(c => ({
+    ...c,
+    compras: ven.filter(v => v.cliente_id===c.id && v.tipo==="credito"),
+    abonos: abonosPorCli[c.id] || [],
+  }));
+  STATE.ventas = ven;
 }
 
 // Borrados (con confirmación)
@@ -215,6 +235,10 @@ function renderInicio(c) {
   const tCr = credPer.reduce((s,v)=>s+Number(v.monto),0);
   const deudores = STATE.clientes.filter(x=>deuda(x)>0);
   const porCobrar = deudores.reduce((s,x)=>s+deuda(x),0);
+  // Totales acumulados (no dependen del periodo)
+  const utilTotal = STATE.clientes.reduce((s,x)=>s+Number(x.utilidad||0),0);
+  const cobradoTotal = STATE.clientes.reduce((s,x)=>s+totalAbonado(x),0);
+  const vendidoCredTotal = STATE.clientes.reduce((s,x)=>s+totalComprado(x),0);
   const ventas = [...contadoPer.map(v=>({...v,_t:"contado"})), ...credPer.map(v=>{
     const cli = STATE.clientes.find(k=>k.id===v.cliente_id); return {...v,_t:"credito",_cli:cli?cli.nombre:""};
   })].sort((a,b)=>b.fecha_venta.localeCompare(a.fecha_venta));
@@ -222,16 +246,30 @@ function renderInicio(c) {
   c.innerHTML = `
   <div style="padding-top:20px">
     ${bannerError()}
+    ${mesActivoObj()?`<p style="font-size:12px;color:#0e5c3f;font-weight:800;margin:0 4px 10px">📅 Mostrando: ${esc(mesActivoObj().nombre)}${mesCerrado()?' 🔒':''}</p>`:''}
     <div style="display:flex;gap:8px;margin-bottom:16px">
       <button class="perbtn" data-p="7" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${per===7?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Esta semana</button>
       <button class="perbtn" data-p="30" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${per===30?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Este mes</button>
     </div>
+
+    <h2 style="font-size:13px;font-weight:800;color:#44403c;margin:0 4px 8px">Ventas del periodo</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       ${metric("💵","Contado",COL(tC),contadoPer.length+" ventas","#0e5c3f")}
       ${metric("⏳","Crédito (fiado)",COL(tCr),credPer.length+" compras","#0891b2")}
     </div>
-    <div style="margin-bottom:16px">${metric("📊","Por cobrar (deuda total)",COL(porCobrar),deudores.length+" clientes con saldo","#ea580c")}</div>
-    <!-- MEJORA 2: botón de exportar a CSV -->
+    <div style="margin-bottom:20px">${metric("🧾","Vendido en el periodo",COL(tC+tCr),(contadoPer.length+credPer.length)+" ventas en total","#7c3aed")}</div>
+
+    <!-- Resumen general acumulado (no depende del periodo) -->
+    <div class="card" style="padding:16px;margin-bottom:20px;background:linear-gradient(160deg,#0e5c3f,#07382a)">
+      <p style="font-size:12px;font-weight:800;color:#7fd1ad;margin-bottom:14px;text-transform:uppercase;letter-spacing:.04em">Resumen general (acumulado)</p>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${filaResumen("💰","Utilidad total",COL(utilTotal),"#f4c542")}
+        ${filaResumen("📊","Por cobrar (fiado)",COL(porCobrar),"#f0883e")}
+        ${filaResumen("✅","Ya cobrado (abonos)",COL(cobradoTotal),"#7fd1ad")}
+        ${filaResumen("🛍️","Total vendido a crédito",COL(vendidoCredTotal),"#e7e5e4")}
+      </div>
+    </div>
+
     <button id="btnExport" class="btn-primary" style="width:100%;margin-bottom:20px;display:flex;align-items:center;justify-content:center;gap:8px;background:#0891b2">⬇️ Exportar respaldo (CSV)</button>
     <h2 style="font-size:14px;font-weight:800;color:#44403c;margin:0 4px 8px">Ventas del periodo</h2>
     <div style="display:flex;flex-direction:column;gap:8px">
@@ -270,6 +308,13 @@ function metric(icon,label,val,sub,color) {
     <div style="font-size:20px;font-weight:800">${val}</div>
     <div style="font-size:12px;color:#a8a29e;margin-top:2px">${sub}</div></div>`;
 }
+// Fila de una línea para el resumen general (fondo verde oscuro)
+function filaResumen(icon,label,val,color) {
+  return `<div style="display:flex;align-items:center;gap:10px">
+    <span style="font-size:16px">${icon}</span>
+    <span style="flex:1;font-size:13px;color:#e7e5e4;font-weight:600">${label}</span>
+    <span style="font-size:16px;font-weight:800;color:${color}">${val}</span></div>`;
+}
 
 // MEJORA 2: exportar a CSV (respaldo). Genera dos secciones: ventas y deudas.
 function exportarCSV() {
@@ -301,6 +346,94 @@ function exportarCSV() {
 }
 
 // ---- FIADO ----
+const mesActivoObj = () => STATE.meses.find(m=>m.id===STATE.mesActivo);
+const mesCerrado = () => { const m=mesActivoObj(); return m ? !!m.cerrado : false; };
+
+// Menú horizontal de meses (chips). Toca uno para verlo.
+function menuMeses() {
+  if (!STATE.meses.length) return "";
+  return `<div style="display:flex;gap:8px;overflow-x:auto;padding:0 4px 4px;margin-bottom:14px;-webkit-overflow-scrolling:touch">
+    ${STATE.meses.map(m=>{
+      const on = m.id===STATE.mesActivo;
+      return `<button class="mesbtn" data-id="${m.id}" style="flex:0 0 auto;padding:8px 16px;border-radius:99px;font-weight:700;font-size:13px;border:none;white-space:nowrap;${on?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">${esc(m.nombre)}${m.cerrado?' 🔒':''}</button>`;
+    }).join("")}
+  </div>`;
+}
+function enlazarMenuMeses(c) {
+  c.querySelectorAll(".mesbtn").forEach(b=>b.onclick=()=>{
+    STATE.mesActivo = Number(b.dataset.id);
+    reconstruirClientes();
+    renderContent();
+  });
+}
+
+// ¿El mes activo es el más reciente? Solo desde ahí se puede generar el siguiente.
+function esUltimoMes() {
+  if (!STATE.meses.length) return false;
+  return STATE.meses[STATE.meses.length-1].id === STATE.mesActivo;
+}
+
+const NOMBRES_MES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+// Cierra el mes actual y crea el siguiente, arrastrando los saldos pendientes.
+// El arrastre se hace creando en el mes nuevo una "compra" por el saldo que
+// cada cliente quedó debiendo, para que el mes nuevo arranque con esa deuda.
+async function generarMesSiguiente() {
+  const actual = mesActivoObj();
+  if (!actual) return;
+  const deudoresArrastre = STATE.clientes.filter(x=>deuda(x)>0);
+  const totalArr = deudoresArrastre.reduce((s,x)=>s+deuda(x),0);
+  // Calcular mes/año siguiente
+  let nMes = actual.mes+1, nAnio = actual.anio;
+  if (nMes>12) { nMes=1; nAnio++; }
+  const nombreNuevo = `${NOMBRES_MES[nMes-1]} ${nAnio}`;
+  // Evitar duplicar si ya existe
+  if (STATE.meses.some(m=>m.anio===nAnio && m.mes===nMes)) {
+    alert(`El mes "${nombreNuevo}" ya existe.`); return;
+  }
+  const msg = `Se cerrará ${actual.nombre} (quedará solo lectura) y se creará ${nombreNuevo}.\n\n`+
+    (deudoresArrastre.length
+      ? `${deudoresArrastre.length} cliente(s) arrastran un saldo total de ${COL(totalArr)} al mes nuevo.`
+      : `No hay saldos pendientes que arrastrar.`)+
+    `\n\n¿Continuar?`;
+  if (!confirm(msg)) return;
+  const g = document.getElementById("btnGenMes");
+  if (g) { g.textContent="Generando..."; g.disabled=true; }
+  try {
+    // 1. Crear el mes nuevo
+    const { data:nuevoMes, error:eMes } = await db.from("meses")
+      .insert({ nombre:nombreNuevo, anio:nAnio, mes:nMes }).select().single();
+    if (eMes) throw eMes;
+    // 2. Arrastrar saldos: una compra de tipo credito por el saldo pendiente
+    if (deudoresArrastre.length) {
+      const filas = deudoresArrastre.map(cli=>({
+        cliente_id: cli.id,
+        tipo: "credito",
+        producto: `Saldo anterior (${actual.nombre})`,
+        monto: deuda(cli),
+        fecha_venta: hoy(),
+        fecha_limite: dPlus(15),
+        mes_id: nuevoMes.id,
+      }));
+      const { error:eV } = await db.from("ventas").insert(filas);
+      if (eV) throw eV;
+    }
+    // 3. Cerrar el mes actual
+    const { error:eC } = await db.from("meses").update({ cerrado:true }).eq("id", actual.id);
+    if (eC) throw eC;
+    // 4. Recargar y saltar al mes nuevo
+    STATE.mesActivo = nuevoMes.id;
+    await cargarTodo();
+    STATE.mesActivo = nuevoMes.id;
+    reconstruirClientes();
+    renderContent();
+    alert(`✅ ${nombreNuevo} creado. ${actual.nombre} quedó cerrado.`);
+  } catch(err) {
+    alert("Error al generar el mes: "+(err.message||err));
+    if (g) { g.textContent="📅 Generar el siguiente mes"; g.disabled=false; }
+  }
+}
+
 function renderFiado(c, filtro="") {
   const deudores = STATE.clientes.filter(x=>deuda(x)>0)
     .filter(x=>x.nombre.toLowerCase().includes(filtro.trim().toLowerCase()))
@@ -318,8 +451,9 @@ function renderFiado(c, filtro="") {
   c.innerHTML = `
   <div style="padding-top:20px">
     ${bannerError()}
-    <h2 style="font-size:18px;font-weight:800;margin:0 4px 2px">Libreta de fiado</h2>
-    <p style="font-size:12px;color:#a8a29e;margin:0 4px 12px">Toca el nombre para ver la cuenta · escribí la utilidad a mano</p>
+    <h2 style="font-size:18px;font-weight:800;margin:0 4px 8px">Libreta de fiado</h2>
+    ${menuMeses()}
+    ${mesCerrado()?`<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:1rem;padding:10px 14px;font-size:12px;font-weight:600;margin-bottom:12px">🔒 ${esc((mesActivoObj()||{}).nombre||'')} está cerrado (solo lectura).</div>`:`<p style="font-size:12px;color:#a8a29e;margin:0 4px 12px">Toca el nombre para ver la cuenta · escribí la utilidad a mano</p>`}
     <div style="position:relative;margin-bottom:16px">
       <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px">🔍</span>
       <input id="busca" class="inp" style="padding-left:40px;background:#fff;box-shadow:0 2px 10px rgba(7,56,42,.05)" placeholder="Buscar cliente..." value="${esc(filtro)}" />
@@ -349,8 +483,8 @@ function renderFiado(c, filtro="") {
               <td style="padding:12px 8px;text-align:right;white-space:nowrap;color:#0e5c3f">${COL(totalAbonado(cli))}</td>
               <td style="padding:12px 8px;text-align:right;font-weight:800;color:#ea580c;white-space:nowrap">${COL(deuda(cli))}</td>
               <td style="padding:8px 12px;text-align:right;white-space:nowrap">
-                <input class="utilinp" data-id="${cli.id}" type="number" inputmode="decimal" value="${cli.utilidad||''}" placeholder="0"
-                  style="width:80px;text-align:right;padding:6px 8px;border:1px solid #e7e5e4;border-radius:8px;font-size:12px;background:#fff;color:#0891b2;font-weight:700" />
+                <input class="utilinp" data-id="${cli.id}" type="number" inputmode="decimal" value="${cli.utilidad||''}" placeholder="0" ${mesCerrado()?'disabled':''}
+                  style="width:80px;text-align:right;padding:6px 8px;border:1px solid #e7e5e4;border-radius:8px;font-size:12px;background:${mesCerrado()?'#f5f5f4':'#fff'};color:#0891b2;font-weight:700" />
               </td>
             </tr>`;
           }).join("")}
@@ -369,9 +503,15 @@ function renderFiado(c, filtro="") {
     </div>
     <p style="font-size:11px;color:#a8a29e;margin:8px 4px 0">💡 Deslizá la tabla a los lados para ver todas las columnas.</p>`
     : (todos.length? `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:40px 0">Ningún cliente con ese nombre.</p>`
-                   : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada. ¡Pura vida!</p></div>`)}
+                   : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada en este mes. ¡Pura vida!</p></div>`)}
+    ${esUltimoMes() && !mesCerrado() ? `
+    <button id="btnGenMes" class="btn-gold" style="width:100%;margin-top:20px">📅 Cerrar ${esc((mesActivoObj()||{}).nombre||'')} y generar el siguiente mes</button>
+    <p style="font-size:11px;color:#a8a29e;margin:8px 4px 0;text-align:center">Los saldos pendientes se arrastran al mes nuevo. El mes actual queda como registro.</p>` : ""}
   </div>`;
   enlazarReintentar();
+  enlazarMenuMeses(c);
+  const gm = document.getElementById("btnGenMes");
+  if (gm) gm.onclick = generarMesSiguiente;
   const bi = document.getElementById("busca");
   bi.oninput = () => { renderFiado(c, bi.value); const x=document.getElementById("busca"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); };
   c.querySelectorAll(".clirow").forEach(b=>b.onclick=()=>{ STATE.detalle=Number(b.dataset.id); renderDetalle(); });
@@ -436,7 +576,7 @@ function renderDetalle() {
           <button class="delabono" data-id="${a.id}" style="background:none;border:none;font-size:17px;padding:2px;color:#dc2626">🗑️</button></div>`).join("")}
       </div>`:""}
       <div style="display:flex;gap:8px;padding-bottom:8px">
-        <button id="btnAbono" class="btn-primary" style="flex:1">Registrar abono</button>
+        ${mesCerrado()?`<div style="flex:1;padding:14px;border-radius:1rem;background:#f5f5f4;color:#a8a29e;font-weight:700;font-size:13px;text-align:center">🔒 Mes cerrado</div>`:`<button id="btnAbono" class="btn-primary" style="flex:1">Registrar abono</button>`}
         <a id="btnWa" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:14px 20px;border-radius:1rem;font-weight:700;color:#fff;background:#25D366;text-decoration:none">💬 WhatsApp</a>
       </div>
     </div>
@@ -444,7 +584,8 @@ function renderDetalle() {
   ov.onclick = () => ov.remove();
   document.body.appendChild(ov);
   document.getElementById("cerrar").onclick = () => ov.remove();
-  document.getElementById("btnAbono").onclick = () => renderAbono(cli);
+  const bA = document.getElementById("btnAbono");
+  if (bA) bA.onclick = () => renderAbono(cli);
   const refrescar = () => {
     ov.remove();
     const sigue = STATE.clientes.find(x=>x.id===cli.id && deuda(x)>0);
@@ -508,7 +649,7 @@ function renderAbono(cli) {
     if (num<=0) return;
     if (num>saldo) { document.getElementById("err").style.display="block"; return; }
     const g = document.getElementById("guardar"); g.textContent="Guardando..."; g.disabled=true;
-    const { error } = await db.from("abonos").insert({ cliente_id:cli.id, monto:num, fecha:hoy() });
+    const { error } = await db.from("abonos").insert({ cliente_id:cli.id, monto:num, fecha:hoy(), mes_id:STATE.mesActivo });
     if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar"; return; }
     await cargarTodo();
     ov.remove();
@@ -596,13 +737,20 @@ function renderEditarAbono(abono, cli, alGuardar) {
 
 // ---- NUEVA VENTA ----
 function renderNueva(c) {
+  // Si el mes activo está cerrado, no se puede registrar. Saltar al último mes abierto.
+  if (mesCerrado()) {
+    const abierto = [...STATE.meses].reverse().find(m=>!m.cerrado);
+    if (abierto) { STATE.mesActivo = abierto.id; reconstruirClientes(); }
+  }
+  const mesDestino = mesActivoObj();
   let tipo="contado", clienteSel="nuevo", plazo=15;
   const draw = () => {
     const existentes = STATE.clientes;
     c.innerHTML = `
     <div style="padding-top:20px">
       <button id="volver" style="display:flex;align-items:center;gap:4px;color:#78716c;font-size:14px;margin-bottom:12px;background:none;border:none">← Volver</button>
-      <h2 style="font-size:18px;font-weight:800;margin:0 4px 16px">Nueva venta</h2>
+      <h2 style="font-size:18px;font-weight:800;margin:0 4px 4px">Nueva venta</h2>
+      ${mesDestino?`<p style="font-size:12px;color:#0e5c3f;font-weight:700;margin:0 4px 16px">Se registrará en: ${esc(mesDestino.nombre)}</p>`:'<div style="margin-bottom:16px"></div>'}
       <div style="display:flex;gap:8px;margin-bottom:16px">
         <button class="tipobtn" data-t="contado" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${tipo==='contado'?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Contado</button>
         <button class="tipobtn" data-t="credito" style="flex:1;padding:10px;border-radius:1rem;font-weight:700;font-size:14px;border:none;${tipo==='credito'?'background:#0e5c3f;color:#fff':'background:#fff;color:#78716c;border:1px solid #e7e5e4'}">Crédito (fiado)</button>
@@ -649,7 +797,7 @@ function renderNueva(c) {
     const g = document.getElementById("guardar"); g.textContent="Guardando..."; g.disabled=true;
     try {
       if (tipo==="contado") {
-        const { error } = await db.from("ventas").insert({ tipo:"contado", producto:prod, monto, fecha_venta:hoy() });
+        const { error } = await db.from("ventas").insert({ tipo:"contado", producto:prod, monto, fecha_venta:hoy(), mes_id:STATE.mesActivo });
         if (error) throw error;
       } else {
         let clienteId = clienteSel!=="nuevo" ? Number(clienteSel) : null;
@@ -663,7 +811,7 @@ function renderNueva(c) {
           if (e1) throw e1;
           clienteId = nuevo.id;
         }
-        const { error:e2 } = await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(plazo) });
+        const { error:e2 } = await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(plazo), mes_id:STATE.mesActivo });
         if (e2) throw e2;
       }
       await cargarTodo();
