@@ -55,17 +55,20 @@ let STATE = { user:null, clientes:[], ventas:[], meses:[], mesActivo:null, perio
 // y la interfaz muestra un aviso en vez de mostrar todo en cero.
 async function cargarTodo() {
   try {
-    const [cliRes, venRes, aboRes, mesRes] = await Promise.all([
+    const [cliRes, venRes, aboRes, mesRes, gasRes] = await Promise.all([
       db.from("clientes").select("*").order("nombre"),
       db.from("ventas").select("*").order("fecha_venta", { ascending:false }),
       db.from("abonos").select("*").order("fecha"),
       db.from("meses").select("*").order("anio").order("mes"),
+      db.from("gastos").select("*").order("fecha", { ascending:false }),
     ]);
     if (cliRes.error) throw cliRes.error;
     if (venRes.error) throw venRes.error;
     if (aboRes.error) throw aboRes.error;
     if (mesRes.error) throw mesRes.error;
+    if (gasRes.error) throw gasRes.error;
     const cli = cliRes.data, ven = venRes.data, abo = aboRes.data;
+    STATE.gastosTodos = gasRes.data || [];
     STATE.clientesRaw = cli || [];
     STATE.meses = mesRes.data || [];
     STATE.ventasTodas = ven || [];   // todas, sin filtrar (para reasignar, etc.)
@@ -98,6 +101,7 @@ function reconstruirClientes() {
     abonos: abonosPorCli[c.id] || [],
   }));
   STATE.ventas = ven;
+  STATE.gastos = (STATE.gastosTodos||[]).filter(g => g.mes_id===mid);
 }
 
 // Borrados (con confirmación)
@@ -267,6 +271,12 @@ function renderInicio(c) {
   const utilTotal = STATE.clientes.reduce((s,x)=>s+Number(x.utilidad||0),0);
   const cobradoTotal = STATE.clientes.reduce((s,x)=>s+totalAbonado(x),0);
   const vendidoCredTotal = STATE.clientes.reduce((s,x)=>s+totalComprado(x),0);
+  // Gastos del mes (todos, no por periodo, porque van por mes)
+  const gastosMes = STATE.gastos || [];
+  const totalGastos = gastosMes.reduce((s,g)=>s+Number(g.monto),0);
+  const gastosPorCat = {};
+  gastosMes.forEach(g=>{ gastosPorCat[g.categoria] = (gastosPorCat[g.categoria]||0)+Number(g.monto); });
+  const catsOrdenadas = Object.entries(gastosPorCat).sort((a,b)=>b[1]-a[1]);
   const ventas = [...contadoPer.map(v=>({...v,_t:"contado"})), ...credPer.map(v=>{
     const cli = STATE.clientes.find(k=>k.id===v.cliente_id); return {...v,_t:"credito",_cli:cli?cli.nombre:""};
   })].sort((a,b)=>b.fecha_venta.localeCompare(a.fecha_venta));
@@ -309,6 +319,29 @@ function renderInicio(c) {
       </div>
     </div>
 
+    <!-- Gastos del mes -->
+    <div class="card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <p style="font-size:12px;font-weight:800;color:#44403c">🧾 Gastos ${mesActivoObj()?'· '+esc(mesActivoObj().nombre):''}</p>
+        ${!mesCerrado()?`<button id="btnAddGasto" style="background:#0e5c3f;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-weight:700;font-size:12px">+ Agregar</button>`:''}
+      </div>
+      <p style="font-size:11px;color:#a8a29e;margin-bottom:14px">Agua, luz, cable, gasolina, viáticos, etc.</p>
+      ${catsOrdenadas.length? `
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+          ${catsOrdenadas.map(([cat,tot])=>`
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+              <span style="color:#57534e">${esc(cat)}</span>
+              <span style="font-weight:700">${COL(tot)}</span>
+            </div>`).join("")}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:2px solid #e7e5e4">
+          <span style="font-size:13px;font-weight:800;color:#78716c">Total gastos</span>
+          <span style="font-size:18px;font-weight:800;color:#dc2626">${COL(totalGastos)}</span>
+        </div>
+        <button id="btnVerGastos" style="width:100%;margin-top:12px;background:none;border:1px solid #e7e5e4;border-radius:10px;padding:8px;font-size:12px;font-weight:700;color:#57534e">Ver detalle / eliminar</button>`
+      : `<p style="text-align:center;color:#a8a29e;font-size:13px;padding:16px 0">Sin gastos registrados este mes.</p>`}
+    </div>
+
     <!-- Resumen general acumulado (no depende del periodo) -->
     <div class="card" style="padding:16px;margin-bottom:20px;background:linear-gradient(160deg,#0e5c3f,#07382a)">
       <p style="font-size:12px;font-weight:800;color:#7fd1ad;margin-bottom:14px;text-transform:uppercase;letter-spacing:.04em">Resumen general (acumulado)</p>
@@ -317,6 +350,10 @@ function renderInicio(c) {
         ${filaResumen("📊","Por cobrar (fiado)",COL(porCobrar),"#f0883e")}
         ${filaResumen("✅","Ya cobrado (abonos)",COL(cobradoTotal),"#7fd1ad")}
         ${filaResumen("🛍️","Total vendido a crédito",COL(vendidoCredTotal),"#e7e5e4")}
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:13px;font-weight:800;color:#fff">Balance del mes<br><span style="font-size:10px;font-weight:600;color:#7fd1ad">Utilidad − gastos</span></span>
+        <span style="font-size:20px;font-weight:800;color:${utilTotal-totalGastos>=0?'#7fd1ad':'#fca5a5'}">${COL(utilTotal-totalGastos)}</span>
       </div>
     </div>
 
@@ -374,6 +411,10 @@ function renderInicio(c) {
     inpB.addEventListener("blur", ()=>guardarDinero("saldo_banco", inpB));
     inpE.addEventListener("blur", ()=>guardarDinero("saldo_efectivo", inpE));
   }
+  const bAG = document.getElementById("btnAddGasto");
+  if (bAG) bAG.onclick = renderNuevoGasto;
+  const bVG = document.getElementById("btnVerGastos");
+  if (bVG) bVG.onclick = renderListaGastos;
 }
 function metric(icon,label,val,sub,color) {
   return `<div class="card" style="padding:16px">
@@ -413,6 +454,12 @@ function exportarCSV() {
   STATE.clientes.filter(c=>deuda(c)>0).forEach(c=>{
     filas.push([c.nombre, c.telefono||"", totalComprado(c), totalAbonado(c), deuda(c), c.utilidad||0, atrasado(c)?"Atrasado":"Al dia"]);
   });
+  filas.push([]);
+  filas.push(["=== GASTOS DEL MES ==="]);
+  filas.push(["Fecha","Categoria","Monto","Nota"]);
+  (STATE.gastos||[]).forEach(g=>{
+    filas.push([g.fecha, g.categoria, g.monto, g.nota||""]);
+  });
   // Convertir a CSV con comillas escapadas
   const csv = filas.map(fila => fila.map(campo => {
     const s = String(campo??"");
@@ -425,6 +472,91 @@ function exportarCSV() {
   a.download = `puravida-respaldo-${hoy()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ---- GASTOS ----
+const CATEGORIAS_GASTO = ["Agua","Luz","Cable","Teléfono","Internet","Gasolina","Viáticos","Alquiler","Salarios","Mercadería","Otros"];
+
+function renderNuevoGasto() {
+  let cat = CATEGORIAS_GASTO[0];
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:70";
+  const draw = () => {
+    ov.innerHTML = `
+    <div style="background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 24px 32px;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="width:48px;height:4px;background:#e7e5e4;border-radius:99px;margin:0 auto 16px"></div>
+      <h3 style="font-size:18px;font-weight:800;margin-bottom:4px">Nuevo gasto</h3>
+      <p style="font-size:12px;color:#a8a29e;margin-bottom:16px">Se registra en ${esc((mesActivoObj()||{}).nombre||'')}</p>
+      <label class="lbl">Categoría</label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+        ${CATEGORIAS_GASTO.map(k=>`<button type="button" class="catbtn" data-c="${k}" style="padding:8px 14px;border-radius:99px;font-weight:700;font-size:13px;border:none;${cat===k?'background:#0e5c3f;color:#fff':'background:#f5f5f4;color:#78716c'}">${k}</button>`).join("")}
+      </div>
+      <label class="lbl">Monto (₡)</label>
+      <input id="gmonto" class="inp" style="margin-bottom:12px;font-size:18px" type="number" inputmode="decimal" placeholder="0" />
+      <label class="lbl">Nota (opcional)</label>
+      <input id="gnota" class="inp" style="margin-bottom:16px" placeholder="Recibo de julio..." />
+      <div style="display:flex;gap:8px">
+        <button id="gcancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
+        <button id="gguardar" class="btn-primary" style="flex:1">Guardar gasto</button>
+      </div>
+    </div>`;
+    ov.querySelectorAll(".catbtn").forEach(b=>b.onclick=()=>{ cat=b.dataset.c; draw(); });
+    document.getElementById("gcancelar").onclick = () => ov.remove();
+    document.getElementById("gguardar").onclick = async () => {
+      const monto = parseFloat(document.getElementById("gmonto").value)||0;
+      const nota = (document.getElementById("gnota").value||"").trim();
+      if (monto<=0) { alert("Escribí un monto válido."); return; }
+      const g = document.getElementById("gguardar"); g.textContent="Guardando..."; g.disabled=true;
+      const { error } = await db.from("gastos").insert({ mes_id:STATE.mesActivo, categoria:cat, monto, nota:nota||null, fecha:hoy() });
+      if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar gasto"; return; }
+      await cargarTodo();
+      ov.remove();
+      renderContent();
+    };
+  };
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  draw();
+}
+
+function renderListaGastos() {
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:70";
+  const draw = () => {
+    const gs = STATE.gastos || [];
+    ov.innerHTML = `
+    <div style="background:#f7f3e8;width:100%;border-radius:24px 24px 0 0;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="position:sticky;top:0;padding:16px 20px;color:#fff;border-radius:24px 24px 0 0;background:linear-gradient(160deg,#0e5c3f,#07382a)">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <p style="font-size:18px;font-weight:800">Gastos de ${esc((mesActivoObj()||{}).nombre||'')}</p>
+          <button id="gcerrar" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:18px">✕</button>
+        </div>
+      </div>
+      <div style="padding:20px">
+        ${gs.length? `<div style="display:flex;flex-direction:column;gap:8px">
+          ${gs.map(g=>`<div style="background:#fff;border-radius:1rem;padding:12px;display:flex;align-items:center;gap:8px">
+            <div style="flex:1"><p style="font-weight:700;font-size:14px">${esc(g.categoria)}</p>
+              <p style="font-size:12px;color:#a8a29e">${g.fecha}${g.nota?' · '+esc(g.nota):''}</p></div>
+            <p style="font-weight:800;font-size:14px;color:#dc2626">${COL(g.monto)}</p>
+            ${!mesCerrado()?`<button class="delgasto" data-id="${g.id}" style="background:none;border:none;font-size:17px;padding:2px;color:#dc2626">🗑️</button>`:''}
+          </div>`).join("")}
+        </div>`
+        : `<p style="text-align:center;color:#a8a29e;padding:32px 0">Sin gastos este mes.</p>`}
+      </div>
+    </div>`;
+    document.getElementById("gcerrar").onclick = () => ov.remove();
+    ov.querySelectorAll(".delgasto").forEach(b=>b.onclick=async()=>{
+      if (!confirm("¿Eliminar este gasto?")) return;
+      const { error } = await db.from("gastos").delete().eq("id", Number(b.dataset.id));
+      if (error) { alert("Error: "+error.message); return; }
+      await cargarTodo();
+      draw();
+      renderContent();
+    });
+  };
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  draw();
 }
 
 // ---- FIADO ----
@@ -458,10 +590,12 @@ async function eliminarMes() {
   if (STATE.meses[STATE.meses.length-1].id !== m.id) { alert("Solo se puede eliminar el mes más reciente."); return; }
   const nVentas = (STATE.ventasTodas||[]).filter(v=>v.mes_id===m.id).length;
   const nAbonos = (STATE.abonosTodos||[]).filter(a=>a.mes_id===m.id).length;
-  if (!confirm(`¿Eliminar ${m.nombre}?\n\nSe borrarán ${nVentas} venta(s) y ${nAbonos} abono(s) de este mes.\nEl mes anterior se reabrirá.\n\nEsta acción no se puede deshacer.`)) return;
+  const nGastos = (STATE.gastosTodos||[]).filter(gg=>gg.mes_id===m.id).length;
+  if (!confirm(`¿Eliminar ${m.nombre}?\n\nSe borrarán ${nVentas} venta(s), ${nAbonos} abono(s) y ${nGastos} gasto(s) de este mes.\nEl mes anterior se reabrirá.\n\nEsta acción no se puede deshacer.`)) return;
   try {
     await db.from("ventas").delete().eq("mes_id", m.id);
     await db.from("abonos").delete().eq("mes_id", m.id);
+    await db.from("gastos").delete().eq("mes_id", m.id);
     const { error } = await db.from("meses").delete().eq("id", m.id);
     if (error) throw error;
     // Reabrir el mes anterior
