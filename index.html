@@ -126,6 +126,34 @@ const proximoVence = (c) => c.compras.map(x=>x.fecha_limite).filter(Boolean).sor
 const enRango = (f,dias) => { const lim=new Date(); lim.setDate(lim.getDate()-dias); return f >= lim.toISOString().slice(0,10); };
 const vencido = (f) => f && f < hoy(); // vencido si la fecha límite es anterior a hoy
 
+// Cuántas cuotas debieron pagarse desde la fecha de venta hasta hoy.
+function cuotasVencidas(compra) {
+  if (!compra.frecuencia || !compra.monto_cuota) return 0;
+  const dias = { semanal:7, quincenal:15, mensual:30 }[compra.frecuencia] || 15;
+  const inicio = new Date(compra.fecha_venta+"T00:00:00");
+  const ahora = new Date(hoy()+"T00:00:00");
+  const difDias = Math.floor((ahora - inicio) / (1000*60*60*24));
+  if (difDias < dias) return 0; // aún no vence la primera cuota
+  return Math.floor(difDias / dias);
+}
+// Cuánto DEBERÍA haber abonado un cliente a hoy según sus cuotas (tope: lo que debe en total).
+function esperadoAHoy(cli) {
+  let esperado = 0;
+  cli.compras.forEach(c=>{
+    if (c.frecuencia && c.monto_cuota) {
+      esperado += cuotasVencidas(c) * Number(c.monto_cuota);
+    }
+  });
+  return Math.min(esperado, totalComprado(cli));
+}
+// ¿El cliente está atrasado en sus cuotas? (abonó menos de lo que debería a hoy)
+function atrasado(cli) {
+  if (deuda(cli)<=0) return false;
+  const conCuotas = cli.compras.some(c=>c.frecuencia && c.monto_cuota);
+  if (!conCuotas) return vencido(proximoVence(cli)); // sin cuotas: usa fecha límite simple
+  return totalAbonado(cli) < esperadoAHoy(cli);
+}
+
 // ====== RENDER ======
 function render() {
   if (!STATE.user) return renderLogin();
@@ -259,6 +287,28 @@ function renderInicio(c) {
     </div>
     <div style="margin-bottom:20px">${metric("🧾","Vendido en el periodo",COL(tC+tCr),(contadoPer.length+credPer.length)+" ventas en total","#7c3aed")}</div>
 
+    <!-- Dinero disponible del mes: banco y efectivo (anotado a mano) -->
+    <div class="card" style="padding:16px;margin-bottom:20px">
+      <p style="font-size:12px;font-weight:800;color:#44403c;margin-bottom:4px">💵 Dinero disponible ${mesActivoObj()?'· '+esc(mesActivoObj().nombre):''}</p>
+      <p style="font-size:11px;color:#a8a29e;margin-bottom:14px">Anotá a mano lo que tenés. Se arrastra al cambiar de mes.</p>
+      <div style="display:flex;gap:10px;margin-bottom:12px">
+        <div style="flex:1">
+          <label class="lbl">🏦 En banco</label>
+          <input id="inpBanco" type="number" inputmode="decimal" ${mesCerrado()?'disabled':''} value="${(mesActivoObj()||{}).saldo_banco||''}" placeholder="0"
+            style="width:100%;padding:10px;border:1px solid #e7e5e4;border-radius:10px;font-size:15px;font-weight:700;background:${mesCerrado()?'#f5f5f4':'#fff'};color:#0e5c3f" />
+        </div>
+        <div style="flex:1">
+          <label class="lbl">💵 Efectivo</label>
+          <input id="inpEfectivo" type="number" inputmode="decimal" ${mesCerrado()?'disabled':''} value="${(mesActivoObj()||{}).saldo_efectivo||''}" placeholder="0"
+            style="width:100%;padding:10px;border:1px solid #e7e5e4;border-radius:10px;font-size:15px;font-weight:700;background:${mesCerrado()?'#f5f5f4':'#fff'};color:#0e5c3f" />
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid #f0ede3">
+        <span style="font-size:13px;font-weight:700;color:#78716c">Total disponible</span>
+        <span id="totalDisp" style="font-size:18px;font-weight:800;color:#0e5c3f">${COL((Number((mesActivoObj()||{}).saldo_banco)||0)+(Number((mesActivoObj()||{}).saldo_efectivo)||0))}</span>
+      </div>
+    </div>
+
     <!-- Resumen general acumulado (no depende del periodo) -->
     <div class="card" style="padding:16px;margin-bottom:20px;background:linear-gradient(160deg,#0e5c3f,#07382a)">
       <p style="font-size:12px;font-weight:800;color:#7fd1ad;margin-bottom:14px;text-transform:uppercase;letter-spacing:.04em">Resumen general (acumulado)</p>
@@ -299,6 +349,31 @@ function renderInicio(c) {
     if (v) renderEditarVenta(v);
   });
   document.getElementById("btnExport").onclick = exportarCSV;
+  // Banco / efectivo del mes: total en vivo y guardado al salir del campo
+  const inpB = document.getElementById("inpBanco");
+  const inpE = document.getElementById("inpEfectivo");
+  const totalDisp = document.getElementById("totalDisp");
+  if (inpB && inpE && totalDisp && !mesCerrado()) {
+    const recalc = () => {
+      const t = (parseFloat(inpB.value)||0)+(parseFloat(inpE.value)||0);
+      totalDisp.textContent = COL(t);
+    };
+    const guardarDinero = async (campo, inp) => {
+      const val = parseFloat(inp.value)||0;
+      const m = mesActivoObj(); if (!m) return;
+      if (Number(m[campo]||0)===val) return;
+      inp.style.borderColor = "#f4c542";
+      const { error } = await db.from("meses").update({ [campo]:val }).eq("id", m.id);
+      if (error) { alert("Error al guardar: "+error.message); inp.style.borderColor="#dc2626"; return; }
+      m[campo] = val; // actualizar en memoria
+      inp.style.borderColor = "#0e5c3f";
+      setTimeout(()=>{ inp.style.borderColor="#e7e5e4"; }, 700);
+    };
+    inpB.addEventListener("input", recalc);
+    inpE.addEventListener("input", recalc);
+    inpB.addEventListener("blur", ()=>guardarDinero("saldo_banco", inpB));
+    inpE.addEventListener("blur", ()=>guardarDinero("saldo_efectivo", inpE));
+  }
 }
 function metric(icon,label,val,sub,color) {
   return `<div class="card" style="padding:16px">
@@ -319,17 +394,24 @@ function filaResumen(icon,label,val,color) {
 // MEJORA 2: exportar a CSV (respaldo). Genera dos secciones: ventas y deudas.
 function exportarCSV() {
   const filas = [];
+  const m = mesActivoObj();
+  if (m) {
+    filas.push(["=== MES: "+m.nombre+(m.cerrado?" (cerrado)":"")+" ==="]);
+    filas.push(["En banco","En efectivo","Total disponible"]);
+    filas.push([m.saldo_banco||0, m.saldo_efectivo||0, (Number(m.saldo_banco)||0)+(Number(m.saldo_efectivo)||0)]);
+    filas.push([]);
+  }
   filas.push(["=== VENTAS ==="]);
-  filas.push(["Fecha","Tipo","Cliente","Producto","Monto","Fecha limite"]);
+  filas.push(["Fecha","Tipo","Cliente","Producto","Monto","Fecha limite","Frecuencia","Cuota"]);
   STATE.ventas.forEach(v=>{
     const cli = v.cliente_id ? (STATE.clientes.find(k=>k.id===v.cliente_id)||{}).nombre||"" : "";
-    filas.push([v.fecha_venta, v.tipo, cli, v.producto, v.monto, v.fecha_limite||""]);
+    filas.push([v.fecha_venta, v.tipo, cli, v.producto, v.monto, v.fecha_limite||"", v.frecuencia||"", v.monto_cuota||""]);
   });
   filas.push([]);
   filas.push(["=== DEUDAS ACTUALES ==="]);
-  filas.push(["Cliente","Telefono","Comprado","Abonado","Debe","Utilidad"]);
+  filas.push(["Cliente","Telefono","Comprado","Abonado","Debe","Utilidad","Estado"]);
   STATE.clientes.filter(c=>deuda(c)>0).forEach(c=>{
-    filas.push([c.nombre, c.telefono||"", totalComprado(c), totalAbonado(c), deuda(c), c.utilidad||0]);
+    filas.push([c.nombre, c.telefono||"", totalComprado(c), totalAbonado(c), deuda(c), c.utilidad||0, atrasado(c)?"Atrasado":"Al dia"]);
   });
   // Convertir a CSV con comillas escapadas
   const csv = filas.map(fila => fila.map(campo => {
@@ -367,6 +449,35 @@ function enlazarMenuMeses(c) {
   });
 }
 
+// Elimina un mes creado por error: borra sus ventas y abonos, y el mes.
+// Solo permitido en el último mes y si no es el único que queda.
+async function eliminarMes() {
+  const m = mesActivoObj();
+  if (!m) return;
+  if (STATE.meses.length<=1) { alert("No podés eliminar el único mes que existe."); return; }
+  if (STATE.meses[STATE.meses.length-1].id !== m.id) { alert("Solo se puede eliminar el mes más reciente."); return; }
+  const nVentas = (STATE.ventasTodas||[]).filter(v=>v.mes_id===m.id).length;
+  const nAbonos = (STATE.abonosTodos||[]).filter(a=>a.mes_id===m.id).length;
+  if (!confirm(`¿Eliminar ${m.nombre}?\n\nSe borrarán ${nVentas} venta(s) y ${nAbonos} abono(s) de este mes.\nEl mes anterior se reabrirá.\n\nEsta acción no se puede deshacer.`)) return;
+  try {
+    await db.from("ventas").delete().eq("mes_id", m.id);
+    await db.from("abonos").delete().eq("mes_id", m.id);
+    const { error } = await db.from("meses").delete().eq("id", m.id);
+    if (error) throw error;
+    // Reabrir el mes anterior
+    const anterior = STATE.meses[STATE.meses.length-2];
+    if (anterior) await db.from("meses").update({ cerrado:false }).eq("id", anterior.id);
+    STATE.mesActivo = anterior ? anterior.id : null;
+    await cargarTodo();
+    if (anterior) STATE.mesActivo = anterior.id;
+    reconstruirClientes();
+    renderContent();
+    alert(`✅ ${m.nombre} eliminado.`);
+  } catch(err) {
+    alert("Error al eliminar el mes: "+(err.message||err));
+  }
+}
+
 // ¿El mes activo es el más reciente? Solo desde ahí se puede generar el siguiente.
 function esUltimoMes() {
   if (!STATE.meses.length) return false;
@@ -402,7 +513,7 @@ async function generarMesSiguiente() {
   try {
     // 1. Crear el mes nuevo
     const { data:nuevoMes, error:eMes } = await db.from("meses")
-      .insert({ nombre:nombreNuevo, anio:nAnio, mes:nMes }).select().single();
+      .insert({ nombre:nombreNuevo, anio:nAnio, mes:nMes, saldo_banco:actual.saldo_banco||0, saldo_efectivo:actual.saldo_efectivo||0 }).select().single();
     if (eMes) throw eMes;
     // 2. Arrastrar saldos: una compra de tipo credito por el saldo pendiente
     if (deudoresArrastre.length) {
@@ -437,7 +548,11 @@ async function generarMesSiguiente() {
 function renderFiado(c, filtro="") {
   const deudores = STATE.clientes.filter(x=>deuda(x)>0)
     .filter(x=>x.nombre.toLowerCase().includes(filtro.trim().toLowerCase()))
-    .sort((a,b)=>(proximoVence(a)||"").localeCompare(proximoVence(b)||""));
+    .sort((a,b)=>{
+      const aa=atrasado(a)?0:1, bb=atrasado(b)?0:1;
+      if (aa!==bb) return aa-bb; // atrasados primero
+      return (proximoVence(a)||"").localeCompare(proximoVence(b)||"");
+    });
   const todos = STATE.clientes.filter(x=>deuda(x)>0);
   const totalDeuda = deudores.reduce((s,x)=>s+deuda(x),0);
   const totalMonto = deudores.reduce((s,x)=>s+totalComprado(x),0);
@@ -445,8 +560,10 @@ function renderFiado(c, filtro="") {
   const totalUtil  = deudores.reduce((s,x)=>s+Number(x.utilidad||0),0);
   const artResumen = (cli)=>{
     if (!cli.compras.length) return "—";
-    if (cli.compras.length===1) return esc(cli.compras[0].producto);
-    return esc(cli.compras[0].producto)+" +"+(cli.compras.length-1);
+    const c0 = cli.compras[0];
+    const frecTxt = c0.frecuencia && c0.monto_cuota ? `<br><span style="font-size:10px;color:#0891b2">${COL(c0.monto_cuota)}/${{semanal:'sem',quincenal:'quinc',mensual:'mes'}[c0.frecuencia]||''}</span>` : "";
+    const base = cli.compras.length===1 ? esc(c0.producto) : esc(c0.producto)+" +"+(cli.compras.length-1);
+    return base+frecTxt;
   };
   c.innerHTML = `
   <div style="padding-top:20px">
@@ -477,6 +594,7 @@ function renderFiado(c, filtro="") {
             return `<tr style="border-top:1px solid #f0ede3;background:${bg}">
               <td class="clirow" data-id="${cli.id}" style="padding:12px;cursor:pointer;position:sticky;left:0;background:${bg}">
                 <p style="font-weight:700;color:#0e5c3f;text-decoration:underline">${esc(cli.nombre)}</p>
+                ${atrasado(cli)?`<span style="display:inline-block;margin-top:4px;font-size:10px;font-weight:700;color:#dc2626;background:#fef2f2;padding:2px 6px;border-radius:6px">⚠ Atrasado</span>`:(proximoVence(cli)?`<span style="display:inline-block;margin-top:4px;font-size:10px;color:#78716c">Próx: ${fmt(proximoVence(cli))}</span>`:'')}
               </td>
               <td style="padding:12px 8px;color:#57534e">${artResumen(cli)}</td>
               <td style="padding:12px 8px;text-align:right;white-space:nowrap">${COL(totalComprado(cli))}</td>
@@ -507,11 +625,15 @@ function renderFiado(c, filtro="") {
     ${esUltimoMes() && !mesCerrado() ? `
     <button id="btnGenMes" class="btn-gold" style="width:100%;margin-top:20px">📅 Cerrar ${esc((mesActivoObj()||{}).nombre||'')} y generar el siguiente mes</button>
     <p style="font-size:11px;color:#a8a29e;margin:8px 4px 0;text-align:center">Los saldos pendientes se arrastran al mes nuevo. El mes actual queda como registro.</p>` : ""}
+    ${esUltimoMes() && STATE.meses.length>1 ? `
+    <button id="btnDelMes" style="width:100%;margin-top:12px;padding:12px;border-radius:1rem;font-weight:700;font-size:13px;border:1px solid #fecaca;background:#fff;color:#dc2626">🗑️ Eliminar ${esc((mesActivoObj()||{}).nombre||'')} (abierto por error)</button>` : ""}
   </div>`;
   enlazarReintentar();
   enlazarMenuMeses(c);
   const gm = document.getElementById("btnGenMes");
   if (gm) gm.onclick = generarMesSiguiente;
+  const dm = document.getElementById("btnDelMes");
+  if (dm) dm.onclick = eliminarMes;
   const bi = document.getElementById("busca");
   bi.oninput = () => { renderFiado(c, bi.value); const x=document.getElementById("busca"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); };
   c.querySelectorAll(".clirow").forEach(b=>b.onclick=()=>{ STATE.detalle=Number(b.dataset.id); renderDetalle(); });
@@ -540,7 +662,7 @@ function fmtLargo(iso){ return new Date(iso+"T00:00:00").toLocaleDateString("es-
 // ---- DETALLE CLIENTE (modal) ----
 function renderDetalle() {
   const cli = STATE.clientes.find(x=>x.id===STATE.detalle); if(!cli) return;
-  const venc = proximoVence(cli); const vd = vencido(venc);
+  const venc = proximoVence(cli); const vd = atrasado(cli);
   const ov = document.createElement("div");
   ov.id="modal";
   ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:50";
@@ -577,7 +699,10 @@ function renderDetalle() {
       </div>`:""}
       <div style="display:flex;gap:8px;padding-bottom:8px">
         ${mesCerrado()?`<div style="flex:1;padding:14px;border-radius:1rem;background:#f5f5f4;color:#a8a29e;font-weight:700;font-size:13px;text-align:center">🔒 Mes cerrado</div>`:`<button id="btnAbono" class="btn-primary" style="flex:1">Registrar abono</button>`}
-        <a id="btnWa" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:14px 20px;border-radius:1rem;font-weight:700;color:#fff;background:#25D366;text-decoration:none">💬 WhatsApp</a>
+      </div>
+      <div style="display:flex;gap:8px;padding-bottom:8px">
+        <a id="btnWaCobro" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:14px;border-radius:1rem;font-weight:700;font-size:13px;color:#fff;background:#25D366;text-decoration:none">💬 Recordar cobro</a>
+        <a id="btnWaInfo" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:14px;border-radius:1rem;font-weight:700;font-size:13px;color:#0e5c3f;background:#d1f5e3;text-decoration:none">ℹ️ Enviar saldo</a>
       </div>
     </div>
   </div>`;
@@ -611,11 +736,16 @@ function renderDetalle() {
     const a = cli.abonos.find(x=>x.id===Number(b.dataset.id));
     if (a) renderEditarAbono(a, cli, ()=>{ ov.remove(); STATE.detalle=cli.id; renderDetalle(); });
   });
-  const txt = vd
+  const tel = (cli.telefono||"").replace(/\D/g,"");
+  // Mensaje de cobro (recordatorio)
+  const txtCobro = vd
     ? `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}. Algunos pagos ya pasaron de fecha, ¿cuándo podría abonar? ¡Mil gracias!`
     : `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}${venc?`, con próximo vencimiento el ${fmtLargo(venc)}`:""}. ¡Gracias y pura vida!`;
-  document.getElementById("btnWa").href = `https://wa.me/${(cli.telefono||"").replace(/\D/g,"")}?text=${encodeURIComponent(txt)}`;
-  document.getElementById("btnWa").target = "_blank";
+  // Mensaje informativo (sin cobrar, para cuando el cliente pregunta cuánto debe)
+  const txtInfo = `¡Hola ${cli.nombre}! Pura Vida Shop por aquí. Con gusto le confirmo: su saldo actual es de ${COL(deuda(cli))}${venc && !vd?`, con próximo pago el ${fmtLargo(venc)}`:""}. Cualquier consulta quedo a la orden. ¡Pura vida!`;
+  const waLink = (t) => `https://wa.me/${tel}?text=${encodeURIComponent(t)}`;
+  const bC = document.getElementById("btnWaCobro"); bC.href = waLink(txtCobro); bC.target="_blank";
+  const bI = document.getElementById("btnWaInfo"); bI.href = waLink(txtInfo); bI.target="_blank";
 }
 
 // ---- MODAL ABONO (nuevo) ----
@@ -670,7 +800,15 @@ function renderEditarVenta(venta, alGuardar) {
     <div style="display:flex;flex-direction:column;gap:12px">
       <div><label class="lbl">Producto</label><input id="eprod" class="inp" value="${esc(venta.producto)}" /></div>
       <div><label class="lbl">Monto (₡)</label><input id="emonto" class="inp" type="number" inputmode="decimal" value="${venta.monto}" /></div>
-      ${esCredito?`<div><label class="lbl">Fecha límite de pago</label><input id="efecha" class="inp" type="date" value="${venta.fecha_limite||""}" /></div>`:""}
+      ${esCredito?`<div><label class="lbl">Fecha próximo pago</label><input id="efecha" class="inp" type="date" value="${venta.fecha_limite||""}" /></div>
+      <div><label class="lbl">Frecuencia de pago</label>
+        <select id="efrec" class="inp">
+          <option value="" ${!venta.frecuencia?'selected':''}>Sin cuotas (una sola fecha)</option>
+          <option value="semanal" ${venta.frecuencia==='semanal'?'selected':''}>Semanal</option>
+          <option value="quincenal" ${venta.frecuencia==='quincenal'?'selected':''}>Quincenal</option>
+          <option value="mensual" ${venta.frecuencia==='mensual'?'selected':''}>Mensual</option>
+        </select></div>
+      <div><label class="lbl">Monto por cuota (₡)</label><input id="ecuota" class="inp" type="number" inputmode="decimal" value="${venta.monto_cuota||''}" placeholder="0" /></div>`:""}
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button id="ecancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
@@ -688,6 +826,10 @@ function renderEditarVenta(venta, alGuardar) {
     if (esCredito) {
       const f = document.getElementById("efecha").value;
       if (f) patch.fecha_limite = f;
+      const fr = document.getElementById("efrec").value;
+      patch.frecuencia = fr || null;
+      const cu = parseFloat(document.getElementById("ecuota").value)||0;
+      patch.monto_cuota = cu || null;
     }
     const g = document.getElementById("eguardar"); g.textContent="Guardando..."; g.disabled=true;
     const { error } = await db.from("ventas").update(patch).eq("id", venta.id);
@@ -743,7 +885,8 @@ function renderNueva(c) {
     if (abierto) { STATE.mesActivo = abierto.id; reconstruirClientes(); }
   }
   const mesDestino = mesActivoObj();
-  let tipo="contado", clienteSel="nuevo", plazo=15;
+  let tipo="contado", clienteSel="nuevo", frec="quincenal", montoCuota="";
+  const FREC = { semanal:{dias:7,t:"Semanal"}, quincenal:{dias:15,t:"Quincenal"}, mensual:{dias:30,t:"Mensual"} };
   const draw = () => {
     const existentes = STATE.clientes;
     c.innerHTML = `
@@ -775,11 +918,15 @@ function renderNueva(c) {
       <div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">
         <div><label class="lbl">Producto</label><input id="prod" class="inp" placeholder="Tenis Nike / Perfume Dior" /></div>
         <div><label class="lbl">Monto (₡)</label><input id="monto" class="inp" type="number" inputmode="decimal" placeholder="0" /></div>
-        ${tipo==="credito"?`<div><label class="lbl">¿Cuándo paga?</label>
-          <div style="display:flex;gap:8px">
-            ${[{d:7,t:"Semana"},{d:15,t:"Quincena"},{d:30,t:"Mes"}].map(o=>`
-              <button type="button" class="plazobtn" data-d="${o.d}" style="flex:1;padding:10px 4px;border-radius:1rem;font-weight:700;font-size:13px;border:none;${plazo===o.d?'background:#0e5c3f;color:#fff':'background:#f5f5f4;color:#78716c'}">${o.t}</button>`).join("")}
-          </div></div>`:""}
+        ${tipo==="credito"?`<div><label class="lbl">¿Cada cuánto paga?</label>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            ${Object.entries(FREC).map(([k,o])=>`
+              <button type="button" class="frecbtn" data-f="${k}" style="flex:1;padding:10px 4px;border-radius:1rem;font-weight:700;font-size:13px;border:none;${frec===k?'background:#0e5c3f;color:#fff':'background:#f5f5f4;color:#78716c'}">${o.t}</button>`).join("")}
+          </div>
+          <label class="lbl">¿Cuánto paga por cuota? (₡)</label>
+          <input id="cuota" class="inp" type="number" inputmode="decimal" placeholder="0" value="${montoCuota}" />
+          <p style="font-size:11px;color:#a8a29e;margin-top:6px">Cada ${FREC[frec].t.toLowerCase()} debería abonar esta cantidad. Si no lo hace, se marca “atrasado”.</p>
+          </div>`:""}
       </div>
       <button id="guardar" class="btn-gold" style="width:100%;margin-top:16px">Guardar venta</button>
     </div>`;
@@ -787,7 +934,10 @@ function renderNueva(c) {
     c.querySelectorAll(".tipobtn").forEach(b=>b.onclick=()=>{ tipo=b.dataset.t; draw(); });
     const sel = document.getElementById("cliSel");
     if (sel) sel.onchange = () => { clienteSel=sel.value; draw(); };
-    c.querySelectorAll(".plazobtn").forEach(b=>b.onclick=()=>{ plazo=Number(b.dataset.d); draw(); });
+    c.querySelectorAll(".frecbtn").forEach(b=>b.onclick=()=>{
+      const cu=document.getElementById("cuota"); if(cu) montoCuota=cu.value; // preservar lo escrito
+      frec=b.dataset.f; draw();
+    });
     document.getElementById("guardar").onclick = guardar;
   };
   const guardar = async () => {
@@ -811,7 +961,9 @@ function renderNueva(c) {
           if (e1) throw e1;
           clienteId = nuevo.id;
         }
-        const { error:e2 } = await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(plazo), mes_id:STATE.mesActivo });
+        const cuotaVal = parseFloat((document.getElementById("cuota")||{}).value)||0;
+        const dias = FREC[frec].dias;
+        const { error:e2 } = await db.from("ventas").insert({ cliente_id:clienteId, tipo:"credito", producto:prod, monto, fecha_venta:hoy(), fecha_limite:dPlus(dias), frecuencia:frec, monto_cuota:cuotaVal||null, mes_id:STATE.mesActivo });
         if (e2) throw e2;
       }
       await cargarTodo();
