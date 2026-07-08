@@ -306,37 +306,57 @@ function renderFiado(c, filtro="") {
     .filter(x=>x.nombre.toLowerCase().includes(filtro.trim().toLowerCase()))
     .sort((a,b)=>(proximoVence(a)||"").localeCompare(proximoVence(b)||""));
   const todos = STATE.clientes.filter(x=>deuda(x)>0);
+  const totalDeuda = deudores.reduce((s,x)=>s+deuda(x),0);
   c.innerHTML = `
   <div style="padding-top:20px">
     ${bannerError()}
     <h2 style="font-size:18px;font-weight:800;margin:0 4px 2px">Libreta de fiado</h2>
-    <p style="font-size:12px;color:#a8a29e;margin:0 4px 12px">Toca un cliente para ver su cuenta</p>
+    <p style="font-size:12px;color:#a8a29e;margin:0 4px 12px">Toca una fila para ver la cuenta del cliente</p>
     <div style="position:relative;margin-bottom:16px">
       <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px">🔍</span>
       <input id="busca" class="inp" style="padding-left:40px;background:#fff;box-shadow:0 2px 10px rgba(7,56,42,.05)" placeholder="Buscar cliente..." value="${esc(filtro)}" />
     </div>
-    <div style="display:flex;flex-direction:column;gap:12px">
-      ${deudores.length? deudores.map(cli=>{
-        const venc = proximoVence(cli); const vd = vencido(venc);
-        return `<button class="clibtn" data-id="${cli.id}" style="text-align:left;border:none;width:100%" >
-          <div class="card" style="padding:16px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-              <div><p style="font-weight:800">${esc(cli.nombre)}</p>
-                <p style="font-size:12px;color:#a8a29e">${cli.compras.length} compra${cli.compras.length>1?'s':''} a crédito</p></div>
-              <div style="text-align:right"><p style="font-size:12px;color:#a8a29e">debe</p>
-                <p style="font-size:20px;font-weight:800;color:#ea580c">${COL(deuda(cli))}</p></div>
-            </div>
-            ${venc?`<div style="font-size:12px;font-weight:600;color:${vd?'#dc2626':'#78716c'}">📅 ${vd?'Tiene pagos vencidos':'Próximo vence '+fmt(venc)}</div>`:""}
-          </div></button>`;
-      }).join("")
-      : (todos.length? `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:40px 0">Ningún cliente con ese nombre.</p>`
-                     : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada. ¡Pura vida!</p></div>`)}
-    </div>
+    ${deudores.length? `
+    <div class="card" style="overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:#0e5c3f;color:#fff">
+            <th style="text-align:left;padding:10px 12px;font-weight:700">Cliente</th>
+            <th style="text-align:right;padding:10px 8px;font-weight:700">Debe</th>
+            <th style="text-align:right;padding:10px 12px;font-weight:700">Vence</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${deudores.map((cli,i)=>{
+            const venc = proximoVence(cli); const vd = vencido(venc);
+            return `<tr class="clirow" data-id="${cli.id}" style="border-top:1px solid #f0ede3;background:${i%2?'#fbfaf5':'#fff'};cursor:pointer">
+              <td style="padding:12px;vertical-align:top">
+                <p style="font-weight:700">${esc(cli.nombre)}</p>
+                <p style="font-size:11px;color:#a8a29e;margin-top:2px">${cli.compras.length} compra${cli.compras.length>1?'s':''}</p>
+              </td>
+              <td style="padding:12px 8px;text-align:right;font-weight:800;color:#ea580c;vertical-align:top;white-space:nowrap">${COL(deuda(cli))}</td>
+              <td style="padding:12px;text-align:right;vertical-align:top;white-space:nowrap">
+                ${venc?`<span style="font-size:12px;font-weight:600;color:${vd?'#dc2626':'#78716c'}">${vd?'⚠ Vencido':fmt(venc)}</span>`:`<span style="color:#d6d3d1">—</span>`}
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #e7e5e4;background:#faf8f0">
+            <td style="padding:12px;font-weight:800">Total (${deudores.length})</td>
+            <td style="padding:12px 8px;text-align:right;font-weight:800;color:#ea580c;white-space:nowrap">${COL(totalDeuda)}</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`
+    : (todos.length? `<p style="text-align:center;color:#a8a29e;font-size:14px;padding:40px 0">Ningún cliente con ese nombre.</p>`
+                   : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada. ¡Pura vida!</p></div>`)}
   </div>`;
   enlazarReintentar();
   const bi = document.getElementById("busca");
   bi.oninput = () => { renderFiado(c, bi.value); const x=document.getElementById("busca"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); };
-  c.querySelectorAll(".clibtn").forEach(b=>b.onclick=()=>{ STATE.detalle=Number(b.dataset.id); renderDetalle(); });
+  c.querySelectorAll(".clirow").forEach(b=>b.onclick=()=>{ STATE.detalle=Number(b.dataset.id); renderDetalle(); });
 }
 function fmt(iso){ return new Date(iso+"T00:00:00").toLocaleDateString("es-CR",{day:"numeric",month:"short"}); }
 function fmtLargo(iso){ return new Date(iso+"T00:00:00").toLocaleDateString("es-CR",{day:"numeric",month:"long"}); }
@@ -631,4 +651,3 @@ document.getElementById("favicon").href = LOGO_ICO;
 </script>
 </body>
 </html>
-
