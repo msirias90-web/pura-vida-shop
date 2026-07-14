@@ -1068,9 +1068,9 @@ function renderDetalle() {
   });
   const tel = (cli.telefono||"").replace(/\D/g,"");
   // Mensaje de cobro (recordatorio)
-  const txtCobro = `Hola ${cli.nombre}, espero que se encuentre muy bien. Le recuerdo amablemente que tiene un abono pendiente. Agradecemos mucho que pueda realizarlo a la mayor brevedad posible al 71503151 Juan Villegas Vega.`;
+  const txtCobro = `Hola estimado cliente, espero que se encuentre muy bien. Le recuerdo amablemente que tiene un abono pendiente. Agradecemos mucho que pueda realizarlo a la mayor brevedad posible al 71503151 Juan Villegas Vega.`;
   // Mensaje informativo (sin cobrar, para cuando el cliente pregunta cuánto debe)
-  const txtInfo = `Hola ${cli.nombre}, esperamos que se encuentre muy bien. Le comparto el saldo actual pendiente de su cuenta para su conocimiento: ${COL(deuda(cli))}.`;
+  const txtInfo = `Hola estimado cliente, esperamos que se encuentre muy bien. Le comparto el saldo actual pendiente de su cuenta para su conocimiento: ${COL(deuda(cli))}.`;
   const waLink = (t) => `https://wa.me/${tel}?text=${encodeURIComponent(t)}`;
   const bC = document.getElementById("btnWaCobro"); bC.href = waLink(txtCobro); bC.target="_blank";
   const bI = document.getElementById("btnWaInfo"); bI.href = waLink(txtInfo); bI.target="_blank";
