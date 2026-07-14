@@ -1067,13 +1067,10 @@ function renderDetalle() {
     if (a) renderEditarAbono(a, cli, ()=>{ ov.remove(); STATE.detalle=cli.id; renderDetalle(); });
   });
   const tel = (cli.telefono||"").replace(/\D/g,"");
-  const neg = nombreNegocio();
   // Mensaje de cobro (recordatorio)
-  const txtCobro = vd
-    ? `¡Hola ${cli.nombre}! ${neg} por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}. Algunos pagos ya pasaron de fecha, ¿cuándo podría abonar? ¡Mil gracias!`
-    : `¡Hola ${cli.nombre}! ${neg} por aquí. Le recuerdo su saldo pendiente de ${COL(deuda(cli))}${venc?`, con próximo vencimiento el ${fmtLargo(venc)}`:""}. ¡Muchas gracias!`;
+  const txtCobro = `Hola ${cli.nombre}, espero que se encuentre muy bien. Le recuerdo amablemente que tiene un abono pendiente. Agradecemos mucho que pueda realizarlo a la mayor brevedad posible al 71503151 Juan Villegas Vega.`;
   // Mensaje informativo (sin cobrar, para cuando el cliente pregunta cuánto debe)
-  const txtInfo = `¡Hola ${cli.nombre}! ${neg} por aquí. Con gusto le confirmo: su saldo actual es de ${COL(deuda(cli))}${venc && !vd?`, con próximo pago el ${fmtLargo(venc)}`:""}. Cualquier consulta quedo a la orden. ¡Saludos!`;
+  const txtInfo = `Hola ${cli.nombre}, esperamos que se encuentre muy bien. Le comparto el saldo actual pendiente de su cuenta para su conocimiento: ${COL(deuda(cli))}.`;
   const waLink = (t) => `https://wa.me/${tel}?text=${encodeURIComponent(t)}`;
   const bC = document.getElementById("btnWaCobro"); bC.href = waLink(txtCobro); bC.target="_blank";
   const bI = document.getElementById("btnWaInfo"); bI.href = waLink(txtInfo); bI.target="_blank";
