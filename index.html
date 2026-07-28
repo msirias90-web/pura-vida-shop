@@ -854,14 +854,11 @@ async function cerrarMesManual() {
   }
 }
 
-// Cierra el mes actual y crea el siguiente, arrastrando los saldos pendientes.
-// El arrastre se hace creando en el mes nuevo una "compra" por el saldo que
-// cada cliente quedó debiendo, para que el mes nuevo arranque con esa deuda.
+// Cierra el mes actual y crea el siguiente. El mes nuevo empieza VACÍO:
+// no arrastra deudas. Las deudas pendientes se siguen viendo en el mes anterior.
 async function generarMesSiguiente() {
   const actual = mesActivoObj();
   if (!actual) return;
-  const deudoresArrastre = STATE.clientes.filter(x=>deuda(x)>0);
-  const totalArr = deudoresArrastre.reduce((s,x)=>s+deuda(x),0);
   // Calcular mes/año siguiente
   let nMes = actual.mes+1, nAnio = actual.anio;
   if (nMes>12) { nMes=1; nAnio++; }
@@ -871,47 +868,32 @@ async function generarMesSiguiente() {
     alert(`El mes "${nombreNuevo}" ya existe.`); return;
   }
   const msg = `Se cerrará ${actual.nombre} (quedará solo lectura) y se creará ${nombreNuevo}.\n\n`+
-    (deudoresArrastre.length
-      ? `${deudoresArrastre.length} cliente(s) arrastran un saldo total de ${COL(totalArr)} al mes nuevo.`
-      : `No hay saldos pendientes que arrastrar.`)+
+    `El mes nuevo empieza vacío. Las deudas pendientes se siguen viendo en ${actual.nombre}.`+
     `\n\n¿Continuar?`;
   if (!confirm(msg)) return;
   const g = document.getElementById("btnGenMes");
   if (g) { g.textContent="Generando..."; g.disabled=true; }
   try {
-    // 1. Crear el mes nuevo
+    // 1. Crear el mes nuevo (arrastra solo el dinero disponible, no las deudas)
     const { data:nuevoMes, error:eMes } = await db.from("meses")
       .insert({ nombre:nombreNuevo, anio:nAnio, mes:nMes, saldo_banco:actual.saldo_banco||0, saldo_efectivo:actual.saldo_efectivo||0 }).select().single();
     if (eMes) throw eMes;
-    // 2. Arrastrar saldos: una compra de tipo credito por el saldo pendiente
-    if (deudoresArrastre.length) {
-      const filas = deudoresArrastre.map(cli=>({
-        cliente_id: cli.id,
-        tipo: "credito",
-        producto: `Saldo anterior (${actual.nombre})`,
-        monto: deuda(cli),
-        fecha_venta: hoy(),
-        fecha_limite: dPlus(15),
-        mes_id: nuevoMes.id,
-      }));
-      const { error:eV } = await db.from("ventas").insert(filas);
-      if (eV) throw eV;
-    }
-    // 3. Cerrar el mes actual
+    // 2. Cerrar el mes actual
     const { error:eC } = await db.from("meses").update({ cerrado:true }).eq("id", actual.id);
     if (eC) throw eC;
-    // 4. Recargar y saltar al mes nuevo
+    // 3. Recargar y saltar al mes nuevo
     STATE.mesActivo = nuevoMes.id;
     await cargarTodo();
     STATE.mesActivo = nuevoMes.id;
     reconstruirClientes();
     renderContent();
-    alert(`✅ ${nombreNuevo} creado. ${actual.nombre} quedó cerrado.`);
+    alert(`✅ ${nombreNuevo} creado (vacío). ${actual.nombre} quedó cerrado.`);
   } catch(err) {
     alert("Error al generar el mes: "+(err.message||err));
     if (g) { g.textContent="📅 Generar el siguiente mes"; g.disabled=false; }
   }
 }
+
 
 function renderFiado(c, filtro="") {
   // Cuenta nueva sin ningún mes: mostrar bienvenida y botón para crear el primero.
@@ -994,7 +976,7 @@ function renderFiado(c, filtro="") {
                    : `<div style="text-align:center;color:#a8a29e;padding:48px 0"><div style="font-size:40px">✅</div><p style="font-size:14px;margin-top:8px">Nadie debe nada en este mes. ¡Pura vida!</p></div>`)}
     ${esUltimoMes() && !mesCerrado() ? `
     <button id="btnGenMes" class="btn-gold" style="width:100%;margin-top:20px">📅 Cerrar ${esc((mesActivoObj()||{}).nombre||'')} y generar el siguiente mes</button>
-    <p style="font-size:11px;color:#a8a29e;margin:8px 4px 0;text-align:center">Los saldos pendientes se arrastran al mes nuevo. El mes actual queda como registro.</p>` : ""}
+    <p style="font-size:11px;color:#a8a29e;margin:8px 4px 0;text-align:center">El mes nuevo empieza vacío. Las deudas pendientes se siguen viendo en este mes.</p>` : ""}
     ${esUltimoMes() && STATE.meses.length>1 ? `
     <button id="btnDelMes" style="width:100%;margin-top:12px;padding:12px;border-radius:1rem;font-weight:700;font-size:13px;border:1px solid #fecaca;background:#fff;color:#dc2626">🗑️ Eliminar ${esc((mesActivoObj()||{}).nombre||'')} (abierto por error)</button>` : ""}
     ${!esUltimoMes() && !mesCerrado() ? `
