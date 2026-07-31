@@ -76,20 +76,26 @@ let STATE = { user:null, clientes:[], ventas:[], meses:[], mesActivo:null, perio
 // y la interfaz muestra un aviso en vez de mostrar todo en cero.
 async function cargarTodo() {
   try {
-    const [cliRes, venRes, aboRes, mesRes, gasRes] = await Promise.all([
+    const [cliRes, venRes, aboRes, mesRes, gasRes, preRes, preAboRes] = await Promise.all([
       db.from("clientes").select("*").order("nombre"),
       db.from("ventas").select("*").order("fecha_venta", { ascending:false }),
       db.from("abonos").select("*").order("fecha"),
       db.from("meses").select("*").order("anio").order("mes"),
       db.from("gastos").select("*").order("fecha", { ascending:false }),
+      db.from("prestamos").select("*").order("fecha", { ascending:false }),
+      db.from("prestamo_abonos").select("*").order("fecha"),
     ]);
     if (cliRes.error) throw cliRes.error;
     if (venRes.error) throw venRes.error;
     if (aboRes.error) throw aboRes.error;
     if (mesRes.error) throw mesRes.error;
     if (gasRes.error) throw gasRes.error;
+    if (preRes.error) throw preRes.error;
+    if (preAboRes.error) throw preAboRes.error;
     const cli = cliRes.data, ven = venRes.data, abo = aboRes.data;
     STATE.gastosTodos = gasRes.data || [];
+    STATE.prestamosTodos = preRes.data || [];
+    STATE.prestamoAbonosTodos = preAboRes.data || [];
     STATE.clientesRaw = cli || [];
     STATE.meses = mesRes.data || [];
     STATE.ventasTodas = ven || [];   // todas, sin filtrar (para reasignar, etc.)
@@ -123,6 +129,13 @@ function reconstruirClientes() {
   }));
   STATE.ventas = ven;
   STATE.gastos = (STATE.gastosTodos||[]).filter(g => g.mes_id===mid);
+  // Préstamos del mes, cada uno con sus abonos
+  const preAbonosPorPrestamo = {};
+  (STATE.prestamoAbonosTodos||[]).forEach(a => { (preAbonosPorPrestamo[a.prestamo_id] ??= []).push(a); });
+  STATE.prestamos = (STATE.prestamosTodos||[]).filter(p => p.mes_id===mid).map(p => ({
+    ...p,
+    abonos: preAbonosPorPrestamo[p.id] || [],
+  }));
 }
 
 // Borrados (con confirmación)
@@ -250,14 +263,16 @@ function renderApp() {
     </div>
     <div style="padding:0 16px;margin-top:-16px" id="content"></div>
   </div>
-  <div style="position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e7e5e4;padding:8px 12px;display:flex;justify-content:space-around;align-items:center">
-    <button class="navbtn" data-tab="inicio" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:64px">
-      <span style="font-size:20px">📈</span><span style="font-size:11px;font-weight:600">Reportes</span></button>
-    <button class="navbtn" data-tab="gastos" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:64px">
-      <span style="font-size:20px">🧾</span><span style="font-size:11px;font-weight:600">Gastos</span></button>
-    <button id="btnNueva" style="width:56px;height:56px;margin-top:-24px;border-radius:50%;background:linear-gradient(135deg,#f4c542,#f0883e);border:none;color:#07382a;font-size:28px;box-shadow:0 8px 20px rgba(240,136,62,.4)">+</button>
-    <button class="navbtn" data-tab="fiado" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:64px">
-      <span style="font-size:20px">👥</span><span style="font-size:11px;font-weight:600">Fiado</span></button>
+  <div style="position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e7e5e4;padding:8px 6px;display:flex;justify-content:space-around;align-items:center">
+    <button class="navbtn" data-tab="inicio" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:56px">
+      <span style="font-size:19px">📈</span><span style="font-size:10px;font-weight:600">Reportes</span></button>
+    <button class="navbtn" data-tab="gastos" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:56px">
+      <span style="font-size:19px">🧾</span><span style="font-size:10px;font-weight:600">Gastos</span></button>
+    <button id="btnNueva" style="width:52px;height:52px;margin-top:-22px;border-radius:50%;background:linear-gradient(135deg,#f4c542,#f0883e);border:none;color:#07382a;font-size:26px;box-shadow:0 8px 20px rgba(240,136,62,.4);flex:0 0 auto">+</button>
+    <button class="navbtn" data-tab="prestamos" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:56px">
+      <span style="font-size:19px">💵</span><span style="font-size:10px;font-weight:600">Préstamos</span></button>
+    <button class="navbtn" data-tab="fiado" style="background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;width:56px">
+      <span style="font-size:19px">👥</span><span style="font-size:10px;font-weight:600">Fiado</span></button>
   </div>`;
   document.getElementById("btnOut").onclick = async () => { await db.auth.signOut(); STATE.user=null; render(); };
   document.getElementById("btnPass").onclick = renderCambiarPass;
@@ -340,6 +355,7 @@ function renderContent() {
   });
   if (STATE.tab==="inicio") return renderInicio(c);
   if (STATE.tab==="gastos") return renderGastos(c);
+  if (STATE.tab==="prestamos") return renderPrestamos(c);
   if (STATE.tab==="fiado") return renderFiado(c);
   if (STATE.tab==="nueva") {
     // Sin meses no se puede registrar; mandar a crear el primer mes.
@@ -572,6 +588,12 @@ function exportarCSV() {
   (STATE.gastos||[]).forEach(g=>{
     filas.push([g.fecha, g.categoria, g.monto, g.nota||""]);
   });
+  filas.push([]);
+  filas.push(["=== PRÉSTAMOS DEL MES ==="]);
+  filas.push(["Fecha","Nombre","Descripcion","Prestado","Pagado","Saldo"]);
+  (STATE.prestamos||[]).forEach(p=>{
+    filas.push([p.fecha, p.nombre, p.descripcion||"", p.monto, prestamoAbonado(p), prestamoSaldo(p)]);
+  });
   // Convertir a CSV con comillas escapadas
   const csv = filas.map(fila => fila.map(campo => {
     const s = String(campo??"");
@@ -731,6 +753,208 @@ function renderGastos(c) {
   });
 }
 
+// ---- PRÉSTAMOS ----
+const prestamoAbonado = (p) => (p.abonos||[]).reduce((s,a)=>s+Number(a.monto),0);
+const prestamoSaldo = (p) => Number(p.monto) - prestamoAbonado(p);
+
+function renderPrestamos(c) {
+  if (!STATE.meses.length) return pantallaSinMeses(c, "Préstamos");
+  const ps = STATE.prestamos || [];
+  const totalPrestado = ps.reduce((s,p)=>s+Number(p.monto),0);
+  const totalAbonado = ps.reduce((s,p)=>s+prestamoAbonado(p),0);
+  const totalSaldo = ps.reduce((s,p)=>s+prestamoSaldo(p),0);
+  c.innerHTML = `
+  <div style="padding-top:20px">
+    ${bannerError()}
+    <h2 style="font-size:18px;font-weight:800;margin:0 4px 8px">Préstamos</h2>
+    ${menuMeses()}
+    ${mesCerrado()?`<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:1rem;padding:10px 14px;font-size:12px;font-weight:600;margin-bottom:12px">🔒 ${esc((mesActivoObj()||{}).nombre||'')} está cerrado (solo lectura).</div>`:''}
+
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div><p style="font-size:12px;color:#78716c;font-weight:600">Total prestado en ${esc((mesActivoObj()||{}).nombre||'el mes')}</p>
+          <p style="font-size:26px;font-weight:800;color:#7c3aed;margin-top:2px">${COL(totalPrestado)}</p></div>
+        ${!mesCerrado()?`<button id="btnAddPrestamo" class="btn-primary" style="padding:12px 16px;background:#7c3aed">+ Prestar</button>`:''}
+      </div>
+      ${ps.length?`<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0ede3;display:flex;justify-content:space-between;font-size:13px">
+        <div style="text-align:center;flex:1"><p style="color:#a8a29e;font-size:11px">Prestado</p><p style="font-weight:800">${COL(totalPrestado)}</p></div>
+        <div style="text-align:center;flex:1"><p style="color:#a8a29e;font-size:11px">Pagado</p><p style="font-weight:800;color:#0e5c3f">${COL(totalAbonado)}</p></div>
+        <div style="text-align:center;flex:1"><p style="color:#a8a29e;font-size:11px">Por cobrar</p><p style="font-weight:800;color:#ea580c">${COL(totalSaldo)}</p></div>
+      </div>`:''}
+    </div>
+
+    <h3 style="font-size:14px;font-weight:800;color:#44403c;margin:0 4px 8px">Detalle</h3>
+    ${ps.length?`<div style="display:flex;flex-direction:column;gap:8px">
+      ${ps.map(p=>{
+        const saldo = prestamoSaldo(p);
+        const pagado = saldo<=0;
+        return `<div class="card prestamo-row" data-id="${p.id}" style="padding:14px;cursor:pointer">
+          <div style="display:flex;align-items:flex-start;gap:10px">
+            <div style="width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#7c3aed1f;flex:0 0 auto">💵</div>
+            <div style="flex:1">
+              <p style="font-weight:800;font-size:15px">${esc(p.nombre)}</p>
+              ${p.descripcion?`<p style="font-size:12px;color:#78716c;margin-top:1px">${esc(p.descripcion)}</p>`:''}
+              <p style="font-size:11px;color:#a8a29e;margin-top:2px">${p.fecha}</p>
+            </div>
+            <div style="text-align:right">
+              <p style="font-weight:800;font-size:15px">${COL(p.monto)}</p>
+              ${pagado?`<p style="font-size:11px;font-weight:700;color:#0e5c3f;margin-top:2px">✅ Pagado</p>`
+                     :`<p style="font-size:11px;color:#ea580c;margin-top:2px">Debe ${COL(saldo)}</p>`}
+            </div>
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`
+    : `<div style="text-align:center;color:#a8a29e;padding:40px 0"><div style="font-size:40px">💵</div><p style="font-size:14px;margin-top:8px">Sin préstamos este mes.</p>${!mesCerrado()?'<p style="font-size:12px;margin-top:4px">Tocá “+ Prestar” para registrar el primero.</p>':''}</div>`}
+  </div>`;
+  enlazarReintentar();
+  enlazarMenuMeses(c);
+  const bap = document.getElementById("btnAddPrestamo");
+  if (bap) bap.onclick = renderNuevoPrestamo;
+  c.querySelectorAll(".prestamo-row").forEach(b=>b.onclick=()=>{
+    const p = STATE.prestamos.find(x=>x.id===Number(b.dataset.id));
+    if (p) renderDetallePrestamo(p);
+  });
+}
+
+// Modal: nuevo préstamo (nombre, descripción, monto)
+function renderNuevoPrestamo() {
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:70";
+  ov.innerHTML = `
+  <div style="background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 24px 32px" onclick="event.stopPropagation()">
+    <div style="width:48px;height:4px;background:#e7e5e4;border-radius:99px;margin:0 auto 16px"></div>
+    <h3 style="font-size:18px;font-weight:800;margin-bottom:4px">Nuevo préstamo</h3>
+    <p style="font-size:12px;color:#a8a29e;margin-bottom:16px">Se registra en ${esc((mesActivoObj()||{}).nombre||'')}</p>
+    <label class="lbl">Nombre</label>
+    <input id="pnombre" class="inp" style="margin-bottom:12px" placeholder="Carlos" />
+    <label class="lbl">Descripción (opcional)</label>
+    <input id="pdesc" class="inp" style="margin-bottom:12px" placeholder="1 préstamo" />
+    <label class="lbl">Monto (₡)</label>
+    <input id="pmonto" class="inp" style="margin-bottom:16px;font-size:18px" type="number" inputmode="decimal" placeholder="0" />
+    <div style="display:flex;gap:8px">
+      <button id="pcancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
+      <button id="pguardar" class="btn-primary" style="flex:1;background:#7c3aed">Guardar</button>
+    </div>
+  </div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  document.getElementById("pcancelar").onclick = () => ov.remove();
+  document.getElementById("pnombre").focus();
+  document.getElementById("pguardar").onclick = async () => {
+    const nombre = (document.getElementById("pnombre").value||"").trim();
+    const desc = (document.getElementById("pdesc").value||"").trim();
+    const monto = parseFloat(document.getElementById("pmonto").value)||0;
+    if (!nombre || monto<=0) { alert("Escribí el nombre y un monto válido."); return; }
+    const g = document.getElementById("pguardar"); g.textContent="Guardando..."; g.disabled=true;
+    const { error } = await db.from("prestamos").insert({ mes_id:STATE.mesActivo, nombre, descripcion:desc||null, monto, fecha:hoy() });
+    if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar"; return; }
+    await cargarTodo();
+    ov.remove();
+    renderContent();
+  };
+}
+
+// Modal: detalle de un préstamo con sus abonos y opción de abonar/eliminar
+function renderDetallePrestamo(p) {
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:70";
+  const draw = () => {
+    const pre = STATE.prestamos.find(x=>x.id===p.id) || p;
+    const saldo = prestamoSaldo(pre);
+    ov.innerHTML = `
+    <div style="background:#f7f3e8;width:100%;border-radius:24px 24px 0 0;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="position:sticky;top:0;padding:16px 20px;color:#fff;border-radius:24px 24px 0 0;background:linear-gradient(160deg,#7c3aed,#5b21b6)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="width:48px;height:4px;background:rgba(255,255,255,.3);border-radius:99px"></div>
+          <button id="pcerrar" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:18px">✕</button>
+        </div>
+        <p style="font-size:22px;font-weight:800">${esc(pre.nombre)}</p>
+        ${pre.descripcion?`<p style="font-size:13px;color:#ddd6fe;margin-top:2px">${esc(pre.descripcion)}</p>`:''}
+        <p style="font-size:13px;color:#ddd6fe;margin-top:10px">Saldo pendiente</p>
+        <p style="font-size:32px;font-weight:800">${COL(saldo)}</p>
+        <p style="font-size:12px;color:#ddd6fe;margin-top:4px">Prestado ${COL(pre.monto)} · Pagado ${COL(prestamoAbonado(pre))}</p>
+      </div>
+      <div style="padding:20px">
+        ${(pre.abonos||[]).length?`<h3 style="font-size:14px;font-weight:800;color:#44403c;margin-bottom:8px">Abonos recibidos</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+          ${pre.abonos.map(a=>`<div style="background:#fff;border-radius:1rem;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <p style="font-size:12px;color:#78716c;flex:1">${a.fecha}</p>
+            <p style="font-weight:700;font-size:14px;color:#0e5c3f">− ${COL(a.monto)}</p>
+            ${!mesCerrado()?`<button class="delpreabono" data-id="${a.id}" style="background:none;border:none;font-size:17px;padding:2px;color:#dc2626">🗑️</button>`:''}
+          </div>`).join("")}
+        </div>`:''}
+        <div style="display:flex;gap:8px;padding-bottom:8px">
+          ${mesCerrado()?`<div style="flex:1;padding:14px;border-radius:1rem;background:#f5f5f4;color:#a8a29e;font-weight:700;font-size:13px;text-align:center">🔒 Mes cerrado</div>`
+            :`${saldo>0?`<button id="pabonar" class="btn-primary" style="flex:1;background:#7c3aed">Registrar abono</button>`:''}
+              <button id="pelim" style="flex:0 0 auto;padding:14px 18px;border-radius:1rem;font-weight:700;font-size:13px;border:1px solid #fecaca;background:#fff;color:#dc2626">🗑️</button>`}
+        </div>
+      </div>
+    </div>`;
+    document.getElementById("pcerrar").onclick = () => ov.remove();
+    const ab = document.getElementById("pabonar");
+    if (ab) ab.onclick = () => renderAbonoPrestamo(pre, draw);
+    const el = document.getElementById("pelim");
+    if (el) el.onclick = async () => {
+      if (!confirm(`¿Eliminar el préstamo de ${pre.nombre}?\n\nSe borran también sus abonos. No se puede deshacer.`)) return;
+      const { error } = await db.from("prestamos").delete().eq("id", pre.id);
+      if (error) { alert("Error: "+error.message); return; }
+      await cargarTodo();
+      ov.remove();
+      renderContent();
+    };
+    ov.querySelectorAll(".delpreabono").forEach(b=>b.onclick=async(e)=>{
+      e.stopPropagation();
+      if (!confirm("¿Eliminar este abono?")) return;
+      const { error } = await db.from("prestamo_abonos").delete().eq("id", Number(b.dataset.id));
+      if (error) { alert("Error: "+error.message); return; }
+      await cargarTodo();
+      draw();
+      renderContent();
+    });
+  };
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  draw();
+}
+
+// Modal: registrar abono a un préstamo
+function renderAbonoPrestamo(pre, alGuardar) {
+  const saldo = prestamoSaldo(pre);
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:80";
+  ov.innerHTML = `
+  <div style="background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 24px 32px" onclick="event.stopPropagation()">
+    <div style="width:48px;height:4px;background:#e7e5e4;border-radius:99px;margin:0 auto 16px"></div>
+    <h3 style="font-size:18px;font-weight:800;margin-bottom:4px">Registrar abono</h3>
+    <p style="font-size:14px;color:#a8a29e;margin-bottom:4px">${esc(pre.nombre)}</p>
+    <p style="font-size:14px;font-weight:700;color:#ea580c;margin-bottom:16px">Saldo actual: ${COL(saldo)}</p>
+    <label class="lbl">Monto del abono</label>
+    <input id="pamonto" class="inp" style="font-size:18px;margin-bottom:8px" type="number" inputmode="decimal" placeholder="0" />
+    <p id="paerr" style="font-size:12px;color:#ef4444;margin-bottom:8px;display:none">El abono no puede superar el saldo.</p>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button id="pacancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
+      <button id="paguardar" class="btn-primary" style="flex:1;background:#7c3aed">Guardar</button>
+    </div>
+  </div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  document.getElementById("pacancelar").onclick = () => ov.remove();
+  const mi = document.getElementById("pamonto"); mi.focus();
+  document.getElementById("paguardar").onclick = async () => {
+    const num = parseFloat(mi.value)||0;
+    if (num<=0) return;
+    if (num>saldo) { document.getElementById("paerr").style.display="block"; return; }
+    const g = document.getElementById("paguardar"); g.textContent="Guardando..."; g.disabled=true;
+    const { error } = await db.from("prestamo_abonos").insert({ prestamo_id:pre.id, monto:num, fecha:hoy() });
+    if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar"; return; }
+    await cargarTodo();
+    ov.remove();
+    if (alGuardar) alGuardar();
+    renderContent();
+  };
+}
+
 // ---- FIADO ----
 const mesActivoObj = () => STATE.meses.find(m=>m.id===STATE.mesActivo);
 const mesCerrado = () => { const m=mesActivoObj(); return m ? !!m.cerrado : false; };
@@ -768,6 +992,7 @@ async function eliminarMes() {
     await db.from("ventas").delete().eq("mes_id", m.id);
     await db.from("abonos").delete().eq("mes_id", m.id);
     await db.from("gastos").delete().eq("mes_id", m.id);
+    await db.from("prestamos").delete().eq("mes_id", m.id);
     const { error } = await db.from("meses").delete().eq("id", m.id);
     if (error) throw error;
     // Reabrir el mes anterior
