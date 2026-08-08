@@ -384,6 +384,11 @@ function renderInicio(c) {
   const gastosPorCat = {};
   gastosMes.forEach(g=>{ gastosPorCat[g.categoria] = (gastosPorCat[g.categoria]||0)+Number(g.monto); });
   const catsOrdenadas = Object.entries(gastosPorCat).sort((a,b)=>b[1]-a[1]);
+  // Préstamos del mes
+  const prestamosMes = STATE.prestamos || [];
+  const totalPrestado = prestamosMes.reduce((s,p)=>s+Number(p.monto),0);
+  const totalPrestPagado = prestamosMes.reduce((s,p)=>s+prestamoAbonado(p),0);
+  const totalPrestSaldo = prestamosMes.reduce((s,p)=>s+prestamoSaldo(p),0);
   // Utilidad por mes (para el gráfico de tendencias).
   // Se calcula sumando la utilidad de los clientes que tienen compras a crédito en cada mes.
   const utilidadPorMes = STATE.meses.map(m=>{
@@ -435,8 +440,12 @@ function renderInicio(c) {
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid #f0ede3">
-        <span style="font-size:13px;font-weight:700;color:#78716c">Total disponible</span>
-        <span id="totalDisp" style="font-size:18px;font-weight:800;color:#0e5c3f">${COL((Number((mesActivoObj()||{}).saldo_banco)||0)+(Number((mesActivoObj()||{}).saldo_efectivo)||0))}</span>
+        <span style="font-size:12px;color:#78716c">💵 Abonos de préstamos (efectivo)</span>
+        <span style="font-size:14px;font-weight:700;color:#7c3aed">+ ${COL(totalPrestPagado)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;margin-top:6px;border-top:2px solid #e7e5e4">
+        <span style="font-size:13px;font-weight:800;color:#44403c">Total disponible</span>
+        <span id="totalDisp" style="font-size:18px;font-weight:800;color:#0e5c3f">${COL((Number((mesActivoObj()||{}).saldo_banco)||0)+(Number((mesActivoObj()||{}).saldo_efectivo)||0)+totalPrestPagado)}</span>
       </div>
     </div>
 
@@ -448,6 +457,20 @@ function renderInicio(c) {
           <p style="font-size:11px;color:#a8a29e;margin-top:2px">${catsOrdenadas.length? catsOrdenadas.length+' categoría(s)' : 'Sin gastos este mes'}</p></div>
         <button id="btnIrGastos" style="background:#0e5c3f;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-weight:700;font-size:13px">Ver gastos →</button>
       </div>
+    </div>
+
+    <!-- Préstamos del mes (resumen; el detalle está en la pestaña Préstamos) -->
+    <div class="card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:${prestamosMes.length?'12px':'0'}">
+        <div><p style="font-size:12px;font-weight:800;color:#44403c">💵 Préstamos del mes</p>
+          <p style="font-size:22px;font-weight:800;color:#7c3aed;margin-top:4px">${COL(totalPrestado)}</p>
+          <p style="font-size:11px;color:#a8a29e;margin-top:2px">${prestamosMes.length? prestamosMes.length+' préstamo(s)' : 'Sin préstamos este mes'}</p></div>
+        <button id="btnIrPrestamos" style="background:#7c3aed;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-weight:700;font-size:13px">Ver →</button>
+      </div>
+      ${prestamosMes.length?`<div style="display:flex;justify-content:space-between;padding-top:12px;border-top:1px solid #f0ede3;font-size:13px">
+        <div style="text-align:center;flex:1"><p style="color:#a8a29e;font-size:11px">Pagado</p><p style="font-weight:800;color:#0e5c3f">${COL(totalPrestPagado)}</p></div>
+        <div style="text-align:center;flex:1"><p style="color:#a8a29e;font-size:11px">Por cobrar</p><p style="font-weight:800;color:#ea580c">${COL(totalPrestSaldo)}</p></div>
+      </div>`:''}
     </div>
 
     <!-- Resumen general acumulado (no depende del periodo) -->
@@ -522,7 +545,7 @@ function renderInicio(c) {
   const totalDisp = document.getElementById("totalDisp");
   if (inpB && inpE && totalDisp && !mesCerrado()) {
     const recalc = () => {
-      const t = (parseFloat(inpB.value)||0)+(parseFloat(inpE.value)||0);
+      const t = (parseFloat(inpB.value)||0)+(parseFloat(inpE.value)||0)+totalPrestPagado;
       totalDisp.textContent = COL(t);
     };
     const guardarDinero = async (campo, inp) => {
@@ -543,6 +566,8 @@ function renderInicio(c) {
   }
   const bIG = document.getElementById("btnIrGastos");
   if (bIG) bIG.onclick = () => { STATE.tab="gastos"; renderContent(); };
+  const bIP = document.getElementById("btnIrPrestamos");
+  if (bIP) bIP.onclick = () => { STATE.tab="prestamos"; renderContent(); };
 }
 function metric(icon,label,val,sub,color) {
   return `<div class="card" style="padding:16px">
@@ -889,11 +914,14 @@ function renderDetallePrestamo(p) {
             :`${saldo>0?`<button id="pabonar" class="btn-primary" style="flex:1;background:#7c3aed">Registrar abono</button>`:''}
               <button id="pelim" style="flex:0 0 auto;padding:14px 18px;border-radius:1rem;font-weight:700;font-size:13px;border:1px solid #fecaca;background:#fff;color:#dc2626">🗑️</button>`}
         </div>
+        ${!mesCerrado()?`<div style="padding-bottom:8px"><button id="pmas" style="width:100%;padding:12px;border-radius:1rem;font-weight:700;font-size:13px;border:1px solid #ddd6fe;background:#f5f3ff;color:#7c3aed">➕ Prestar más a ${esc(pre.nombre)}</button></div>`:''}
       </div>
     </div>`;
     document.getElementById("pcerrar").onclick = () => ov.remove();
     const ab = document.getElementById("pabonar");
     if (ab) ab.onclick = () => renderAbonoPrestamo(pre, draw);
+    const mas = document.getElementById("pmas");
+    if (mas) mas.onclick = () => renderPrestarMas(pre, draw);
     const el = document.getElementById("pelim");
     if (el) el.onclick = async () => {
       if (!confirm(`¿Eliminar el préstamo de ${pre.nombre}?\n\nSe borran también sus abonos. No se puede deshacer.`)) return;
@@ -948,6 +976,42 @@ function renderAbonoPrestamo(pre, alGuardar) {
     const g = document.getElementById("paguardar"); g.textContent="Guardando..."; g.disabled=true;
     const { error } = await db.from("prestamo_abonos").insert({ prestamo_id:pre.id, monto:num, fecha:hoy() });
     if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Guardar"; return; }
+    await cargarTodo();
+    ov.remove();
+    if (alGuardar) alGuardar();
+    renderContent();
+  };
+}
+
+// Modal: prestar más a un préstamo existente (le suma al monto).
+function renderPrestarMas(pre, alGuardar) {
+  const ov = document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(7,32,22,.92);display:flex;align-items:flex-end;z-index:80";
+  ov.innerHTML = `
+  <div style="background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 24px 32px" onclick="event.stopPropagation()">
+    <div style="width:48px;height:4px;background:#e7e5e4;border-radius:99px;margin:0 auto 16px"></div>
+    <h3 style="font-size:18px;font-weight:800;margin-bottom:4px">Prestar más</h3>
+    <p style="font-size:14px;color:#a8a29e;margin-bottom:4px">${esc(pre.nombre)}</p>
+    <p style="font-size:13px;color:#78716c;margin-bottom:16px">Préstamo actual: ${COL(pre.monto)} · Saldo: ${COL(prestamoSaldo(pre))}</p>
+    <label class="lbl">¿Cuánto más le prestás? (₡)</label>
+    <input id="pmmonto" class="inp" style="font-size:18px;margin-bottom:16px" type="number" inputmode="decimal" placeholder="0" />
+    <div style="display:flex;gap:8px">
+      <button id="pmcancelar" style="flex:1;padding:12px;border-radius:1rem;font-weight:700;color:#57534e;background:#f5f5f4;border:none">Cancelar</button>
+      <button id="pmguardar" class="btn-primary" style="flex:1;background:#7c3aed">Sumar al préstamo</button>
+    </div>
+  </div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  document.getElementById("pmcancelar").onclick = () => ov.remove();
+  const mi = document.getElementById("pmmonto"); mi.focus();
+  document.getElementById("pmguardar").onclick = async () => {
+    const extra = parseFloat(mi.value)||0;
+    if (extra<=0) { alert("Escribí un monto válido."); return; }
+    const g = document.getElementById("pmguardar"); g.textContent="Guardando..."; g.disabled=true;
+    const nuevoMonto = Number(pre.monto) + extra;
+    const { error } = await db.from("prestamos").update({ monto:nuevoMonto }).eq("id", pre.id);
+    if (error) { alert("Error al guardar: "+error.message); g.disabled=false; g.textContent="Sumar al préstamo"; return; }
+    pre.monto = nuevoMonto; // actualizar en memoria para el modal abierto
     await cargarTodo();
     ov.remove();
     if (alGuardar) alGuardar();
