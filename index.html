@@ -50,7 +50,7 @@ function logoActual() {
   const uid = (typeof ownerActivo === "function") ? ownerActivo() : null;
   const emailPorUid = {
     "dd53261e-9617-4e82-8858-c2c0c8a80fe2": "jjvv171289@gmail.com",
-    "6f0c7e9e-ad42-46b8-a9be-74922134733e": "linda_20792@hotmail.com",
+    "561783b4-4528-435b-a029-f6fe49db21b8": "linda_20792@hotmail.com",
   };
   if (uid && emailPorUid[uid] && LOGOS_POR_USUARIO[emailPorUid[uid]]) {
     return LOGOS_POR_USUARIO[emailPorUid[uid]];
@@ -85,7 +85,7 @@ let STATE = { user:null, clientes:[], ventas:[], meses:[], mesActivo:null, perio
 const UID_ADMIN = "c10cb48c-ec31-4b9c-aeb1-0a2e1e64667e";
 const USUARIOS_SUPERVISABLES = [
   { uid:"dd53261e-9617-4e82-8858-c2c0c8a80fe2", nombre:"JJ · Pura Vida" },
-  { uid:"6f0c7e9e-ad42-46b8-a9be-74922134733e", nombre:"Linda · Studio Veinte" },
+  { uid:"561783b4-4528-435b-a029-f6fe49db21b8", nombre:"Linda · Studio Veinte" },
   { uid:"b8dd400c-2931-41f3-9801-789dab161e6a", nombre:"JJ (2da cuenta)" },
   { uid:"c10cb48c-ec31-4b9c-aeb1-0a2e1e64667e", nombre:"Mi cuenta" },
 ];
